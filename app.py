@@ -227,6 +227,7 @@ def gerar_payload_simulacao(
     s_canal: float,
     n_canal: float,
     nivel_base: float,
+    usar_horton: bool,
     horton_k_h_inv: float,
     horton_f0_multiplicador: float,
     usar_us_para_eq: bool,
@@ -249,6 +250,7 @@ def gerar_payload_simulacao(
             "s_canal": float(s_canal),
             "n_canal": float(n_canal),
             "nivel_base": float(nivel_base),
+            "usar_horton": bool(usar_horton),
             "horton_k_h_inv": float(horton_k_h_inv),
             "horton_f0_multiplicador": float(horton_f0_multiplicador),
             "usar_us_para_eq": bool(usar_us_para_eq),
@@ -271,8 +273,9 @@ def aplicar_payload_em_session(payload: dict) -> None:
     st.session_state["s_canal"] = float(p.get("s_canal", 0.004))
     st.session_state["n_canal"] = float(p.get("n_canal", 0.018))
     st.session_state["nivel_base"] = float(p.get("nivel_base", 0.2))
+    st.session_state["usar_horton"] = bool(p.get("usar_horton", False))
     st.session_state["horton_k_h_inv"] = float(p.get("horton_k_h_inv", 2.5))
-    st.session_state["horton_f0_multiplicador"] = float(p.get("horton_f0_multiplicador", 3.0))
+    st.session_state["horton_f0_multiplicador"] = float(p.get("horton_f0_multiplicador", 1.0))
     st.session_state["usar_us_para_eq"] = bool(p.get("usar_us_para_eq", True))
     st.session_state["hora_inicio_evento"] = str(p.get("hora_inicio_evento", "12:00"))
     st.session_state["hora_fim_evento"] = str(p.get("hora_fim_evento", "12:40"))
@@ -294,6 +297,7 @@ def validar_campos_obrigatorios(
     b_canal: float,
     s_canal: float,
     n_canal: float,
+    usar_horton: bool,
     horton_k_h_inv: float,
     horton_f0_multiplicador: float,
     ac_df: pd.DataFrame,
@@ -317,9 +321,9 @@ def validar_campos_obrigatorios(
         erros.append("`S_canal (m/m)` deve ser maior que zero.")
     if n_canal <= 0:
         erros.append("`n_canal` deve ser maior que zero.")
-    if horton_k_h_inv < 0:
+    if usar_horton and horton_k_h_inv < 0:
         erros.append("`k de Horton (1/h)` deve ser maior ou igual a zero.")
-    if horton_f0_multiplicador < 1:
+    if usar_horton and horton_f0_multiplicador < 1:
         erros.append("`f0/fc de Horton` deve ser maior ou igual a 1.")
     if ac_df.empty:
         erros.append("Tabela de `Areas de contribuicao (AC)` esta vazia.")
@@ -470,8 +474,9 @@ def run_simulation(
     s_canal: float,
     n_canal: float,
     nivel_base: float,
+    usar_horton: bool = False,
     horton_k_h_inv: float = 2.5,
-    horton_f0_multiplicador: float = 3.0,
+    horton_f0_multiplicador: float = 1.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     n_steps = len(chuva_mmh)
     tempo_s = np.arange(n_steps) * dt
@@ -502,14 +507,17 @@ def run_simulation(
             w_eq = area / comp
 
             h_prev = h[t, j] if t == 0 else h[t - 1, j]
-            if chuva_mmh[t] > 0:
+            if usar_horton and chuva_mmh[t] > 0:
                 t_umido_s[j] += dt
             t_umido_h = t_umido_s[j] / 3600.0
 
-            infil_f0_mmh = max(infil_fc_mmh * max(horton_f0_multiplicador, 1.0), infil_fc_mmh)
-            infil_cap_mmh = infil_fc_mmh + (infil_f0_mmh - infil_fc_mmh) * math.exp(
-                -max(horton_k_h_inv, 0.0) * t_umido_h
-            )
+            if usar_horton:
+                infil_f0_mmh = max(infil_fc_mmh * max(horton_f0_multiplicador, 1.0), infil_fc_mmh)
+                infil_cap_mmh = infil_fc_mmh + (infil_f0_mmh - infil_fc_mmh) * math.exp(
+                    -max(horton_k_h_inv, 0.0) * t_umido_h
+                )
+            else:
+                infil_cap_mmh = infil_fc_mmh
             infil_t_ms = min(chuva_ms[t], infil_cap_mmh / 3600000.0)
             infil_real[t, j] = infil_t_ms
 
@@ -713,6 +721,7 @@ def calibrar_horton_em_grade(
                 s_canal=float(s_canal),
                 n_canal=float(n_canal),
                 nivel_base=float(nivel_base),
+                usar_horton=True,
                 horton_k_h_inv=float(k_h),
                 horton_f0_multiplicador=float(f0fc),
             )
@@ -1164,6 +1173,7 @@ elif pagina == "Validacao":
                             s_canal=float(st.session_state.get("s_canal", 0.004)),
                             n_canal=float(st.session_state.get("n_canal", 0.018)),
                             nivel_base=float(st.session_state.get("nivel_base", 0.2)),
+                            usar_horton=True,
                             horton_k_h_inv=float(best["k_h_inv"]),
                             horton_f0_multiplicador=float(best["f0_fc"]),
                         )
@@ -1238,8 +1248,9 @@ else:
     st.session_state.setdefault("s_canal", 0.004)
     st.session_state.setdefault("n_canal", 0.018)
     st.session_state.setdefault("nivel_base", 0.2)
+    st.session_state.setdefault("usar_horton", False)
     st.session_state.setdefault("horton_k_h_inv", 2.5)
-    st.session_state.setdefault("horton_f0_multiplicador", 3.0)
+    st.session_state.setdefault("horton_f0_multiplicador", 1.0)
     st.session_state.setdefault("n_ac", 3)
     st.session_state.setdefault("exutorio_id", 3)
     st.session_state.setdefault("usar_us_para_eq", True)
@@ -1276,11 +1287,17 @@ else:
         dt_seg = st.number_input("Delta t (s)", min_value=60, step=60, key="dt_seg")
         duracao_min = st.number_input("Duracao da chuva (min)", min_value=10, step=10, key="duracao_min")
         st.divider()
-        st.caption("Infiltracao variavel (Horton simplificado)")
-        horton_k_h_inv = st.number_input("k de Horton (1/h)", min_value=0.0, step=0.1, key="horton_k_h_inv")
-        horton_f0_multiplicador = st.number_input(
-            "f0/fc de Horton", min_value=1.0, step=0.1, key="horton_f0_multiplicador"
-        )
+        usar_horton = st.checkbox("Usar infiltracao variavel (Horton)", key="usar_horton")
+        if usar_horton:
+            st.caption("Modo avancado de infiltracao para calibracao.")
+            horton_k_h_inv = st.number_input("k de Horton (1/h)", min_value=0.0, step=0.1, key="horton_k_h_inv")
+            horton_f0_multiplicador = st.number_input(
+                "f0/fc de Horton", min_value=1.0, step=0.1, key="horton_f0_multiplicador"
+            )
+        else:
+            st.caption("Modo metodologia: infiltracao constante por US/AC.")
+            horton_k_h_inv = float(st.session_state.get("horton_k_h_inv", 2.5))
+            horton_f0_multiplicador = float(st.session_state.get("horton_f0_multiplicador", 1.0))
         n_passos = int(math.ceil((duracao_min * 60) / dt_seg) + 1)
         st.write(f"Passos ativos: {n_passos} (inclui t=0)")
 
@@ -1465,6 +1482,7 @@ else:
             s_canal=float(s_canal),
             n_canal=float(n_canal),
             nivel_base=float(nivel_base),
+            usar_horton=bool(usar_horton),
             horton_k_h_inv=float(horton_k_h_inv),
             horton_f0_multiplicador=float(horton_f0_multiplicador),
             usar_us_para_eq=bool(usar_us_para_eq),
@@ -1497,6 +1515,7 @@ else:
                 b_canal=float(b_canal),
                 s_canal=float(s_canal),
                 n_canal=float(n_canal),
+                usar_horton=bool(usar_horton),
                 horton_k_h_inv=float(horton_k_h_inv),
                 horton_f0_multiplicador=float(horton_f0_multiplicador),
                 ac_df=ac_df,
@@ -1524,6 +1543,7 @@ else:
                 s_canal=float(s_canal),
                 n_canal=float(n_canal),
                 nivel_base=float(nivel_base),
+                usar_horton=bool(usar_horton),
                 horton_k_h_inv=float(horton_k_h_inv),
                 horton_f0_multiplicador=float(horton_f0_multiplicador),
             )
