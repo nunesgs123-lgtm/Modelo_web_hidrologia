@@ -5,6 +5,11 @@ Versionamento semântico adaptado ao ciclo do MHU (`MAJOR.MINOR`).
 
 ## [Unreleased] — MHU 1.1 (em preparação)
 
+### Changed — interface e gráfico de nível
+
+- Correção de acentuação/ortografia em textos da interface Streamlit (menus, abas, instruções, legendas, tabelas de calibração e glossário).
+- Hidrograma de nível passa a incluir o **hietograma** de precipitação no mesmo gráfico, com eixos distintos (nível à esquerda; precipitação em mm/h à direita, invertido).
+
 ### Added — diagnóstico de balanço hídrico
 
 - Nova aba **Balanco Hidrico** com resíduos por AC/passo e balanço de bacia (chuva vs chuva+recessão).

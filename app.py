@@ -12,18 +12,18 @@ import plotly.graph_objects as go
 import streamlit as st
 
 
-st.set_page_config(page_title="Modelo Hidrologico Urbano", layout="wide")
+st.set_page_config(page_title="Modelo Hidrológico Urbano", layout="wide")
 
 GLOSSARIO_ROWS = [
-    {"Termo": "Intervalo_registro_s", "Unidade": "s", "Descricao": "Intervalo temporal entre registros de precipitacao (ex.: 600 s)."},
-    {"Termo": "Delta_t_integracao_s", "Unidade": "s", "Descricao": "Passo interno de integracao numerica do modelo (pode ser menor que o intervalo de registro)."},
-    {"Termo": "Duracao_chuva_min", "Unidade": "min", "Descricao": "Duracao do periodo com registros de chuva (exclui recessao)."},
-    {"Termo": "Tempo_recessao_min", "Unidade": "min", "Descricao": "Periodo adicional apos o fim da chuva com P=0 para avaliar a recessao do hidrograma."},
-    {"Termo": "Unidade_chuva", "Unidade": "-", "Descricao": "Unidade de entrada: intensidade (mm/h) ou acumulado por intervalo (mm). Simulacoes antigas: P_mm_h = mm/h."},
-    {"Termo": "N_passos_ativos", "Unidade": "-", "Descricao": "Numero de instantes de saida (inclui t=0 apenas como condicao inicial)."},
-    {"Termo": "Area_m2", "Unidade": "m2", "Descricao": "Area de contribuicao da AC."},
-    {"Termo": "L_m", "Unidade": "m", "Descricao": "Comprimento caracteristico de escoamento na AC."},
-    {"Termo": "S_m_m", "Unidade": "m/m", "Descricao": "Declividade da superficie de escoamento na AC."},
+    {"Termo": "Intervalo_registro_s", "Unidade": "s", "Descricao": "Intervalo temporal entre registros de precipitação (ex.: 600 s)."},
+    {"Termo": "Delta_t_integracao_s", "Unidade": "s", "Descricao": "Passo interno de integração numerica do modelo (pode ser menor que o intervalo de registro)."},
+    {"Termo": "Duracao_chuva_min", "Unidade": "min", "Descricao": "Duração do período com registros de chuva (exclui recessão)."},
+    {"Termo": "Tempo_recessao_min", "Unidade": "min", "Descricao": "Período adicional após o fim da chuva com P=0 para avaliar a recessão do hidrograma."},
+    {"Termo": "Unidade_chuva", "Unidade": "-", "Descricao": "Unidade de entrada: intensidade (mm/h) ou acumulado por intervalo (mm). Simulações antigas: P_mm_h = mm/h."},
+    {"Termo": "N_passos_ativos", "Unidade": "-", "Descricao": "Número de instantes de saída (inclui t=0 apenas como condição inicial)."},
+    {"Termo": "Area_m2", "Unidade": "m2", "Descricao": "Area de contribuição da AC."},
+    {"Termo": "L_m", "Unidade": "m", "Descricao": "Comprimento característico de escoamento na AC."},
+    {"Termo": "S_m_m", "Unidade": "m/m", "Descricao": "Declividade da superfície de escoamento na AC."},
     {
         "Termo": "ACs_montante_ids",
         "Unidade": "-",
@@ -33,46 +33,46 @@ GLOSSARIO_ROWS = [
             "A transferencia no mesmo passo e aproximacao de reservatorios conectados, nao hidraulica explicita de canais."
         ),
     },
-    {"Termo": "h0_m", "Unidade": "m", "Descricao": "Lamina inicial de agua superficial na AC (condicao em t=0)."},
-    {"Termo": "Infiltracao_eq_mm_h", "Unidade": "mm/h", "Descricao": "Taxa de infiltracao equivalente ponderada por area de US."},
+    {"Termo": "h0_m", "Unidade": "m", "Descricao": "Lâmina inicial de água superficial na AC (condição em t=0)."},
+    {"Termo": "Infiltracao_eq_mm_h", "Unidade": "mm/h", "Descricao": "Taxa de infiltração equivalente ponderada por area de US."},
     {"Termo": "n_eq", "Unidade": "-", "Descricao": "Coeficiente de Manning equivalente ponderado por area de US."},
-    {"Termo": "P_mm_h", "Unidade": "mm/h", "Descricao": "Intensidade de precipitacao. Em registros, o valor no fim do intervalo representa a chuva do intervalo anterior."},
-    {"Termo": "P_mm", "Unidade": "mm", "Descricao": "Precipitacao acumulada no intervalo de registro. O valor no fim do intervalo e a lamina caida no intervalo anterior."},
-    {"Termo": "P_m_s", "Unidade": "m/s", "Descricao": "Taxa de precipitacao em unidades SI usada no balanco (constante dentro de cada intervalo de registro)."},
-    {"Termo": "i_excesso_m_s", "Unidade": "m/s", "Descricao": "Taxa liquida apos infiltracao volumetrica: max(p + Q_in/A - f_real, 0)."},
-    {"Termo": "Infiltracao_cap_m_s", "Unidade": "m/s", "Descricao": "Capacidade de infiltracao f no passo (constante ou Horton)."},
-    {"Termo": "Infiltracao_real_m_s", "Unidade": "m/s", "Descricao": "Taxa media de infiltracao real no passo = V_infiltracao / (A * dt)."},
-    {"Termo": "Volume_infiltrado_m3", "Unidade": "m3", "Descricao": "Volume infiltrado no intervalo de integracao."},
+    {"Termo": "P_mm_h", "Unidade": "mm/h", "Descricao": "Intensidade de precipitação. Em registros, o valor no fim do intervalo representa a chuva do intervalo anterior."},
+    {"Termo": "P_mm", "Unidade": "mm", "Descricao": "Precipitação acumulada no intervalo de registro. O valor no fim do intervalo é a lâmina caida no intervalo anterior."},
+    {"Termo": "P_m_s", "Unidade": "m/s", "Descricao": "Taxa de precipitação em unidades SI usada no balanço (constante dentro de cada intervalo de registro)."},
+    {"Termo": "i_excesso_m_s", "Unidade": "m/s", "Descricao": "Taxa líquida após infiltração volumétrica: max(p + Q_in/A - f_real, 0)."},
+    {"Termo": "Infiltracao_cap_m_s", "Unidade": "m/s", "Descricao": "Capacidade de infiltração f no passo (constante ou Horton)."},
+    {"Termo": "Infiltracao_real_m_s", "Unidade": "m/s", "Descricao": "Taxa média de infiltração real no passo = V_infiltração / (A * dt)."},
+    {"Termo": "Volume_infiltrado_m3", "Unidade": "m3", "Descricao": "Volume infiltrado no intervalo de integração."},
     {"Termo": "Volume_infiltrado_acum_m3", "Unidade": "m3", "Descricao": "Volume infiltrado acumulado desde t=0."},
     {"Termo": "Volume_escoado_m3", "Unidade": "m3", "Descricao": "Volume escoado no passo = V_disponivel - V_novo (= Q_out * dt)."},
-    {"Termo": "Residuo_implicito_m3", "Unidade": "m3", "Descricao": "Residuo de V_novo + dt*Q_Manning(V_novo) - V_disponivel apos o solver."},
+    {"Termo": "Residuo_implicito_m3", "Unidade": "m3", "Descricao": "Resíduo de V_novo + dt*Q_Manning(V_novo) - V_disponivel após o solver."},
     {
         "Termo": "Erro_AC_m3",
         "Unidade": "m3",
-        "Descricao": "Resíduo do balanço por AC: V_ini+V_prec+V_mont-V_inf-V_saida-V_fin. Fechamento numerico ≠ validacao fisica.",
+        "Descricao": "Resíduo do balanço por AC: V_ini+V_prec+V_mont-V_inf-V_saída-V_fin. Fechamento numérico ≠ validação física.",
     },
     {
         "Termo": "Erro_bacia_m3",
         "Unidade": "m3",
-        "Descricao": "Resíduo global: V_ini+V_prec-V_inf-V_exutorio-V_fin (transferencias internas excluidas).",
+        "Descricao": "Resíduo global: V_ini+V_prec-V_inf-V_exutório-V_fin (transferências internas excluídas).",
     },
     {
         "Termo": "Tol_balanco_m3",
         "Unidade": "m3",
-        "Descricao": "Tolerancia configuravel de fechamento numerico do balanco hidrico (padrao 1e-6 m3).",
+        "Descricao": "Tolerância configurável de fechamento numérico do balanço hídrico (padrão 1e-6 m3).",
     },
-    {"Termo": "Q_in_m3_s", "Unidade": "m3/s", "Descricao": "Vazao recebida das AC(s) a montante imediata."},
-    {"Termo": "Q_out_m3_s", "Unidade": "m3/s", "Descricao": "Vazao de saida da AC (propagacao por Manning)."},
-    {"Termo": "Q_ex_m3_s", "Unidade": "m3/s", "Descricao": "Vazao no exutorio selecionado."},
-    {"Termo": "Nivel_m", "Unidade": "m", "Descricao": "Profundidade no canal obtida por Manning (secao retangular)."},
-    {"Termo": "Cota_abs_m", "Unidade": "m", "Descricao": "Nivel absoluto = Nivel_m + nivel_base."},
-    {"Termo": "B_canal", "Unidade": "m", "Descricao": "Largura do canal na secao retangular."},
+    {"Termo": "Q_in_m3_s", "Unidade": "m3/s", "Descricao": "Vazão recebida das AC(s) a montante imediata."},
+    {"Termo": "Q_out_m3_s", "Unidade": "m3/s", "Descricao": "Vazão de saída da AC (propagação por Manning)."},
+    {"Termo": "Q_ex_m3_s", "Unidade": "m3/s", "Descricao": "Vazão no exutório selecionado."},
+    {"Termo": "Nivel_m", "Unidade": "m", "Descricao": "Profundidade no canal obtida por Manning (seção retangular)."},
+    {"Termo": "Cota_abs_m", "Unidade": "m", "Descricao": "Nível absoluto = Nivel_m + nivel_base."},
+    {"Termo": "B_canal", "Unidade": "m", "Descricao": "Largura do canal na seção retangular."},
     {"Termo": "S_canal", "Unidade": "m/m", "Descricao": "Declividade do canal."},
     {"Termo": "n_canal", "Unidade": "-", "Descricao": "Manning do canal."},
-    {"Termo": "nivel_base", "Unidade": "m", "Descricao": "Cota de referencia somada ao nivel para cota absoluta."},
-    {"Termo": "NSE / Nash-Sutcliffe", "Unidade": "-", "Descricao": "Eficiencia de Nash-Sutcliffe: 1 - sum((O-S)^2)/sum((O-mean(O))^2). Tambem chamado de Nash."},
-    {"Termo": "R2 (Pearson)", "Unidade": "-", "Descricao": "Coeficiente de determinacao linear: quadrado da correlacao de Pearson entre observado e simulado."},
-    {"Termo": "RMSE / MAE / Vies", "Unidade": "m", "Descricao": "Erro quadratico medio, erro absoluto medio e vies medio (S - O) para nivel."},
+    {"Termo": "nivel_base", "Unidade": "m", "Descricao": "Cota de referência somada ao nivel para cota absoluta."},
+    {"Termo": "NSE / Nash-Sutcliffe", "Unidade": "-", "Descricao": "Eficiência de Nash-Sutcliffe: 1 - sum((O-S)^2)/sum((O-mean(O))^2). Também chamado de Nash."},
+    {"Termo": "R2 (Pearson)", "Unidade": "-", "Descricao": "Coeficiente de determinação linear: quadrado da correlacao de Pearson entre observado e simulado."},
+    {"Termo": "RMSE / MAE / Vies", "Unidade": "m", "Descricao": "Erro quadrático médio, erro absoluto médio e viés médio (S - O) para nível."},
 ]
 
 PASSOS_INTEGRACAO_PERMITIDOS = [600, 300, 120, 60, 30, 10, 5]
@@ -84,8 +84,8 @@ TOL_BALANCO_HIDRICO_M3_DEFAULT = 1e-6
 # Referencias para calibracao (ordens de grandeza; ajustar ao local e ao evento)
 CALIBRACAO_USO_SOLO = [
     {
-        "Classe": "Superficies impermeaveis",
-        "Exemplos": "Vias pavimentadas, passeios, estacionamentos, telhados e coberturas, patios e pracas com piso impermeavel",
+        "Classe": "Superfícies impermeáveis",
+        "Exemplos": "Vias pavimentadas, passeios, estacionamentos, telhados e coberturas, pátios e praças com piso impermeável",
         "Infil_sugerida_mm_h": 1.0,
         "Infil_min_mm_h": 0.0,
         "Infil_max_mm_h": 3.0,
@@ -94,8 +94,8 @@ CALIBRACAO_USO_SOLO = [
         "n_max": 0.020,
     },
     {
-        "Classe": "Superficies semi-impermeaveis",
-        "Exemplos": "Ruas nao pavimentadas, estradas vicinais, caminhos de terra e estacionamentos de terra",
+        "Classe": "Superfícies semi-impermeáveis",
+        "Exemplos": "Ruas não pavimentadas, estradas vicinais, caminhos de terra e estacionamentos de terra",
         "Infil_sugerida_mm_h": 6.0,
         "Infil_min_mm_h": 2.0,
         "Infil_max_mm_h": 12.0,
@@ -105,7 +105,7 @@ CALIBRACAO_USO_SOLO = [
     },
     {
         "Classe": "Solo exposto",
-        "Exemplos": "Terrenos baldios, taludes expostos e areas com remocao de vegetacao",
+        "Exemplos": "Terrenos baldios, taludes expostos e áreas com remoção de vegetação",
         "Infil_sugerida_mm_h": 8.0,
         "Infil_min_mm_h": 2.0,
         "Infil_max_mm_h": 18.0,
@@ -114,7 +114,7 @@ CALIBRACAO_USO_SOLO = [
         "n_max": 0.080,
     },
     {
-        "Classe": "Cobertura vegetal arborea",
+        "Classe": "Cobertura vegetal arbórea",
         "Exemplos": "Florestas, matas ciliares e fragmentos florestais",
         "Infil_sugerida_mm_h": 35.0,
         "Infil_min_mm_h": 20.0,
@@ -125,7 +125,7 @@ CALIBRACAO_USO_SOLO = [
     },
     {
         "Classe": "Cobertura vegetal rasteira",
-        "Exemplos": "Campos naturais, areas de grama e capim natural e outras areas verdes nao urbanizadas",
+        "Exemplos": "Campos naturais, áreas de grama e capim natural e outras áreas verdes não urbanizadas",
         "Infil_sugerida_mm_h": 22.0,
         "Infil_min_mm_h": 10.0,
         "Infil_max_mm_h": 35.0,
@@ -134,8 +134,8 @@ CALIBRACAO_USO_SOLO = [
         "n_max": 0.35,
     },
     {
-        "Classe": "Area verde urbana",
-        "Exemplos": "Quintais residenciais, jardins, pracas com vegetacao, canteiros urbanos, areas verdes de escolas e condominios",
+        "Classe": "Área verde urbana",
+        "Exemplos": "Quintais residenciais, jardins, praças com vegetação, canteiros urbanos, áreas verdes de escolas e condomínios",
         "Infil_sugerida_mm_h": 18.0,
         "Infil_min_mm_h": 8.0,
         "Infil_max_mm_h": 30.0,
@@ -154,8 +154,8 @@ CALIBRACAO_USO_SOLO = [
         "n_max": 0.40,
     },
     {
-        "Classe": "Corpos d'agua",
-        "Exemplos": "Rios, acudes, lagos e canais abertos",
+        "Classe": "Corpos d'água",
+        "Exemplos": "Rios, açudes, lagos e canais abertos",
         "Infil_sugerida_mm_h": 0.0,
         "Infil_min_mm_h": 0.0,
         "Infil_max_mm_h": 0.5,
@@ -165,7 +165,7 @@ CALIBRACAO_USO_SOLO = [
     },
     {
         "Classe": "Infraestrutura urbana linear",
-        "Exemplos": "Ferrovias, patios ferroviarios, corredores de servico e faixas de dutos",
+        "Exemplos": "Ferrovias, pátios ferroviários, corredores de serviço e faixas de dutos",
         "Infil_sugerida_mm_h": 4.0,
         "Infil_min_mm_h": 0.5,
         "Infil_max_mm_h": 12.0,
@@ -174,8 +174,8 @@ CALIBRACAO_USO_SOLO = [
         "n_max": 0.060,
     },
     {
-        "Classe": "Superficies drenantes artificiais",
-        "Exemplos": "Piso intertravado drenante, pavimento permeavel e valas/trincheiras de infiltracao",
+        "Classe": "Superfícies drenantes artificiais",
+        "Exemplos": "Piso intertravado drenante, pavimento permeável e valas/trincheiras de infiltração",
         "Infil_sugerida_mm_h": 25.0,
         "Infil_min_mm_h": 8.0,
         "Infil_max_mm_h": 60.0,
@@ -191,7 +191,7 @@ CALIBRACAO_CANAL_MANNING = [
         "n_sugerido": 0.013,
         "n_min": 0.011,
         "n_max": 0.015,
-        "Notas": "Superficies bem acabadas, canalizacoes urbanas tipicas",
+        "Notas": "Superfícies bem acabadas, canalizações urbanas típicas",
     },
     {
         "Tipo_revestimento": "Concreto rugoso / envelhecido",
@@ -215,21 +215,21 @@ CALIBRACAO_CANAL_MANNING = [
         "Notas": "Leitos dissipativos",
     },
     {
-        "Tipo_revestimento": "Terra limpa (sem vegetacao)",
+        "Tipo_revestimento": "Terra limpa (sem vegetação)",
         "n_sugerido": 0.025,
         "n_min": 0.020,
         "n_max": 0.030,
         "Notas": "Canais de terra compactada",
     },
     {
-        "Tipo_revestimento": "Terra com vegetacao",
+        "Tipo_revestimento": "Terra com vegetação",
         "n_sugerido": 0.038,
         "n_min": 0.030,
         "n_max": 0.045,
-        "Notas": "Leitos com capim ou vegetacao",
+        "Notas": "Leitos com capim ou vegetação",
     },
     {
-        "Tipo_revestimento": "Leito natural (rio / canal nao revestido)",
+        "Tipo_revestimento": "Leito natural (rio / canal não revestido)",
         "n_sugerido": 0.045,
         "n_min": 0.035,
         "n_max": 0.060,
@@ -457,7 +457,7 @@ def validar_campos_obrigatorios(
             f"`Passo de integracao` deve ser um de: {', '.join(str(x) for x in PASSOS_INTEGRACAO_PERMITIDOS)}."
         )
     if duracao_min <= 0:
-        erros.append("`Duracao da chuva (min)` deve ser maior que zero.")
+        erros.append("`Duração da chuva (min)` deve ser maior que zero.")
     if tempo_recessao_min < 0:
         erros.append("`Tempo de recessao (min)` nao pode ser negativo.")
     if dt_int > 0 and tempo_recessao_min > 0:
@@ -469,11 +469,11 @@ def validar_campos_obrigatorios(
         if abs(chuva_s / dt_reg - round(chuva_s / dt_reg)) > 1e-9:
             erros.append("`Duracao da chuva` deve ser multipla do intervalo de registro.")
     if n_ac <= 0:
-        erros.append("`Numero de ACs` deve ser maior que zero.")
+        erros.append("`Número de ACs` deve ser maior que zero.")
     if exutorio_id <= 0:
-        erros.append("`ID da AC de exutorio` deve ser maior que zero.")
+        erros.append("`ID da AC de exutório` deve ser maior que zero.")
     if exutorio_id > n_ac:
-        erros.append("`ID da AC de exutorio` deve estar dentro do intervalo de ACs informadas.")
+        erros.append("`ID da AC de exutório` deve estar dentro do intervalo de ACs informadas.")
     if b_canal <= 0:
         erros.append("`B_canal (m)` deve ser maior que zero.")
     if s_canal <= 0:
@@ -763,6 +763,59 @@ def ordenar_ac_topologicamente(ac_df: pd.DataFrame, exutorio_id: int | None = No
     return ac_ord
 
 
+def fig_nivel_com_hietograma(df_saida: pd.DataFrame) -> go.Figure:
+    """
+    Hidrograma de nível no canal com hietograma de precipitação no mesmo gráfico,
+    em eixos distintos (nível à esquerda; precipitação à direita, invertido).
+    """
+    x = df_saida["Tempo_hhmm"] if "Tempo_hhmm" in df_saida.columns else df_saida["Tempo_s"]
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=x,
+            y=df_saida["P_mm_h"],
+            name="Precipitação (mm/h)",
+            marker=dict(color="rgba(70, 130, 180, 0.45)", line=dict(width=0)),
+            yaxis="y2",
+            hovertemplate="Precipitação: %{y:.2f} mm/h<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=df_saida["Nivel_m"],
+            name="Nível no canal (m)",
+            mode="lines",
+            line=dict(color="#d62728", width=2.5),
+            yaxis="y",
+            hovertemplate="Nível: %{y:.4f} m<extra></extra>",
+        )
+    )
+    p_max = float(pd.to_numeric(df_saida["P_mm_h"], errors="coerce").max() or 0.0)
+    fig.update_layout(
+        title="Hidrograma de nível e hietograma de precipitação",
+        xaxis=dict(title="Horário", type="category"),
+        yaxis=dict(
+            title="Nível no canal (m)",
+            side="left",
+            showgrid=True,
+            zeroline=True,
+        ),
+        yaxis2=dict(
+            title="Precipitação (mm/h)",
+            overlaying="y",
+            side="right",
+            showgrid=False,
+            # Hietograma clássico: precipitação cresce de cima para baixo
+            range=[max(p_max * 1.25, 1.0), 0.0],
+        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        bargap=0.05,
+        margin=dict(t=80, r=60, l=60, b=50),
+    )
+    return fig
+
+
 def fig_rede_conectividade_ac(meta: dict, titulo: str | None = None) -> go.Figure:
     """Figura interativa Plotly da rede montante→jusante."""
     upstream_of: dict[int, list[int]] = meta["upstream_of"]
@@ -834,9 +887,9 @@ def fig_rede_conectividade_ac(meta: dict, titulo: str | None = None) -> go.Figur
         title=titulo
         or (
             f"Rede de conectividade das ACs (exutorio={exutorio_id}) — "
-            "transferencia no mesmo passo = aproximacao de reservatorios conectados"
+            "transferência no mesmo passo = aproximação de reservatórios conectados"
         ),
-        xaxis=dict(title="Direcao montante → jusante (nivel topologico)", showgrid=False, zeroline=False),
+        xaxis=dict(title="Direção montante → jusante (nível topológico)", showgrid=False, zeroline=False),
         yaxis=dict(title="", showgrid=False, zeroline=False, showticklabels=False),
         showlegend=False,
         margin=dict(l=40, r=20, t=60, b=40),
@@ -1973,31 +2026,31 @@ with st.sidebar:
     pagina = st.radio(
         "Navegar",
         [
-            "Simulacao",
-            "Simulacoes salvas",
-            "Balanco Hidrico",
-            "Validacao",
-            "Sugestao de calibracao",
-            "Instrucoes",
-            "Descricao das variaveis",
+            "Simulação",
+            "Simulações salvas",
+            "Balanço Hídrico",
+            "Validação",
+            "Sugestão de calibração",
+            "Instruções",
+            "Descrição das variáveis",
         ],
         label_visibility="collapsed",
         key="pagina_menu",
     )
 
-if pagina == "Balanco Hidrico":
-    st.title("Balanco Hidrico")
+if pagina == "Balanço Hídrico":
+    st.title("Balanço Hídrico")
     st.caption(
-        "Diagnostico de **fechamento numerico** de massa. "
-        "Nao confunda com validacao fisica do modelo (ver aba Validacao)."
+        "Diagnóstico de **fechamento numérico** de massa. "
+        "Não confunda com validação física do modelo (ver aba Validação)."
     )
     st.session_state.setdefault("tol_balanco_m3", float(TOL_BALANCO_HIDRICO_M3_DEFAULT))
     tol_ui = st.number_input(
-        "Tolerancia de fechamento numerico (m3)",
+        "Tolerância de fechamento numérico (m³)",
         min_value=0.0,
         format="%.6e",
         key="tol_balanco_m3",
-        help="Criterio numerico |Erro| <= tol. Padrao 1e-6 m3. Nao e validacao fisica.",
+        help="Critério numérico |Erro| ≤ tol. Padrão 1e-6 m³. Não é validação física.",
     )
 
     df_s = st.session_state.get("df_saida_validacao")
@@ -2006,7 +2059,7 @@ if pagina == "Balanco Hidrico":
     meta_sim = st.session_state.get("sim_meta_balanco")
     if df_s is None or df_ac is None or ac_ref is None or meta_sim is None:
         st.warning(
-            "Nenhuma simulacao disponivel. Va em **Simulacao**, rode o modelo e volte a esta aba."
+            "Nenhuma simulação disponível. Vá em **Simulação**, rode o modelo e volte a esta aba."
         )
     else:
         try:
@@ -2025,34 +2078,34 @@ if pagina == "Balanco Hidrico":
             row_full = df_bacia[df_bacia["Periodo"] == "chuva_mais_recessao"].iloc[0]
 
             st.info(
-                f"Tolerancia configurada: **{tol_ui:.3e} m³**. "
-                f"Fechamento numerico global: "
-                f"{'OK' if bal['fecha_ok'] else 'FORA DA TOLERANCIA'}."
+                f"Tolerância configurada: **{tol_ui:.3e} m³**. "
+                f"Fechamento numérico global: "
+                f"{'OK' if bal['fecha_ok'] else 'FORA DA TOLERÂNCIA'}."
             )
 
             st.subheader("Indicadores — evento de chuva")
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Erro abs. (m3)", f"{row_ev['Erro_abs_m3']:.4e}")
+            c1.metric("Erro abs. (m³)", f"{row_ev['Erro_abs_m3']:.4e}")
             c2.metric("Erro rel. (%)", f"{row_ev['Erro_rel_pct']:.4e}")
             c3.metric("Coef. escoamento", f"{row_ev['Coef_escoamento']:.4f}" if np.isfinite(row_ev["Coef_escoamento"]) else "—")
-            c4.metric("Vol. exutorio (m3)", f"{row_ev['Volume_acum_exutorio_m3']:.4f}")
+            c4.metric("Vol. exutório (m³)", f"{row_ev['Volume_acum_exutorio_m3']:.4f}")
             d1, d2, d3, d4 = st.columns(4)
             d1.metric("% infiltrado", f"{row_ev['Pct_infiltrado']:.2f}" if np.isfinite(row_ev["Pct_infiltrado"]) else "—")
             d2.metric("% armazenado", f"{row_ev['Pct_armazenado']:.2f}" if np.isfinite(row_ev["Pct_armazenado"]) else "—")
-            d3.metric("Lamina escoamento (mm)", f"{row_ev['Lamina_escoamento_mm']:.3f}")
-            d4.metric("Lamina infiltrada (mm)", f"{row_ev['Lamina_infiltrada_mm']:.3f}")
+            d3.metric("Lâmina escoamento (mm)", f"{row_ev['Lamina_escoamento_mm']:.3f}")
+            d4.metric("Lâmina infiltrada (mm)", f"{row_ev['Lamina_infiltrada_mm']:.3f}")
 
-            st.subheader("Indicadores — chuva + recessao")
+            st.subheader("Indicadores — chuva + recessão")
             e1, e2, e3, e4 = st.columns(4)
-            e1.metric("Erro abs. (m3)", f"{row_full['Erro_abs_m3']:.4e}")
+            e1.metric("Erro abs. (m³)", f"{row_full['Erro_abs_m3']:.4e}")
             e2.metric("Erro rel. (%)", f"{row_full['Erro_rel_pct']:.4e}")
             e3.metric("Coef. escoamento", f"{row_full['Coef_escoamento']:.4f}" if np.isfinite(row_full["Coef_escoamento"]) else "—")
-            e4.metric("Vol. exutorio (m3)", f"{row_full['Volume_acum_exutorio_m3']:.4f}")
+            e4.metric("Vol. exutório (m³)", f"{row_full['Volume_acum_exutorio_m3']:.4f}")
             f1, f2, f3, f4 = st.columns(4)
             f1.metric("% infiltrado", f"{row_full['Pct_infiltrado']:.2f}" if np.isfinite(row_full["Pct_infiltrado"]) else "—")
             f2.metric("% armazenado", f"{row_full['Pct_armazenado']:.2f}" if np.isfinite(row_full["Pct_armazenado"]) else "—")
-            f3.metric("Lamina escoamento (mm)", f"{row_full['Lamina_escoamento_mm']:.3f}")
-            f4.metric("Lamina infiltrada (mm)", f"{row_full['Lamina_infiltrada_mm']:.3f}")
+            f3.metric("Lâmina escoamento (mm)", f"{row_full['Lamina_escoamento_mm']:.3f}")
+            f4.metric("Lâmina infiltrada (mm)", f"{row_full['Lamina_infiltrada_mm']:.3f}")
 
             st.subheader("Volumes acumulados (bacia)")
             df_acum = bal["df_acumulados"]
@@ -2062,7 +2115,7 @@ if pagina == "Balanco Hidrico":
                     go.Scatter(
                         x=df_acum["Tempo_s"],
                         y=df_acum["V_prec_acum_m3"],
-                        name="Precipitacao acum.",
+                        name="Precipitação acum.",
                         mode="lines",
                     )
                 )
@@ -2070,7 +2123,7 @@ if pagina == "Balanco Hidrico":
                     go.Scatter(
                         x=df_acum["Tempo_s"],
                         y=df_acum["V_inf_acum_m3"],
-                        name="Infiltracao acum.",
+                        name="Infiltração acum.",
                         mode="lines",
                     )
                 )
@@ -2078,7 +2131,7 @@ if pagina == "Balanco Hidrico":
                     go.Scatter(
                         x=df_acum["Tempo_s"],
                         y=df_acum["V_exutorio_acum_m3"],
-                        name="Exutorio acum.",
+                        name="Exutório acum.",
                         mode="lines",
                     )
                 )
@@ -2104,18 +2157,18 @@ if pagina == "Balanco Hidrico":
                 )
                 st.plotly_chart(fig_acum, use_container_width=True)
 
-            st.subheader("Distribuicao percentual dos componentes")
+            st.subheader("Distribuição percentual dos componentes")
             fig_dist = px.bar(
                 bal["df_distribuicao"],
                 x="Componente",
                 y="Percentual",
                 color="Periodo",
                 barmode="group",
-                title="Percentuais em relacao a precipitacao do periodo",
+                title="Percentuais em relação à precipitação do período",
             )
             st.plotly_chart(fig_dist, use_container_width=True)
 
-            st.subheader("Balanco da bacia")
+            st.subheader("Balanço da bacia")
             st.dataframe(bal["df_bacia"], use_container_width=True, hide_index=True)
 
             st.subheader("Resumo por AC")
@@ -2131,27 +2184,27 @@ if pagina == "Balanco Hidrico":
             )
 
             st.download_button(
-                "Baixar Excel (simulacao + balanco)",
+                "Baixar Excel (simulação + balanço)",
                 data=montar_excel_resultados(df_s, df_ac, bal),
                 file_name="resultado_balanco_hidrico.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="dl_balanco_excel",
             )
         except Exception as exc_bal:
-            st.error(f"Erro no diagnostico de balanco: {exc_bal}")
+            st.error(f"Erro no diagnóstico de balanço: {exc_bal}")
 
-elif pagina == "Sugestao de calibracao":
-    st.title("Sugestao de calibracao")
+elif pagina == "Sugestão de calibração":
+    st.title("Sugestão de calibração")
     st.caption(
-        "Valores de referencia para **infiltracao (mm/h)** e **Manning (n)** na superficie (US) e **n do canal**. "
-        "Sao ordens de magnitude para eventos urbanos; calibre com dados locais e validacao."
+        "Valores de referência para **infiltração (mm/h)** e **Manning (n)** na superfície (US) e **n do canal**. "
+        "São ordens de magnitude para eventos urbanos; calibre com dados locais e validação."
     )
     st.info(
-        "Use estas tabelas como **ponto de partida** na aba **Simulacao** (campos US e `n_canal`). "
-        "Ajuste dentro das faixas conforme solo, declividade, estado de conservacao e comparacao com observacoes."
+        "Use estas tabelas como **ponto de partida** na aba **Simulação** (campos US e `n_canal`). "
+        "Ajuste dentro das faixas conforme solo, declividade, estado de conservação e comparação com observações."
     )
 
-    st.subheader("Uso e ocupacao do solo (superficie — plano inclinado)")
+    st.subheader("Uso e ocupação do solo (superfície — plano inclinado)")
     df_us = pd.DataFrame(CALIBRACAO_USO_SOLO)
     st.dataframe(
         df_us,
@@ -2186,74 +2239,74 @@ elif pagina == "Sugestao de calibracao":
 
     st.markdown(
         """
-**Referencias usadas para sugerir faixas (valores iniciais de calibracao):**
+**Referências usadas para sugerir faixas (valores iniciais de calibração):**
 
-- **Chow, V. T. (1959)** — *Open-Channel Hydraulics* (faixas classicas de `n` de Manning para canais e superficies).
-- **USDA-SCS / NRCS** — manuais hidrologicos e parametros de infiltracao para diferentes coberturas e condicoes de solo.
-- **Tucci, C. E. M.** (drenagem urbana, edicoes diversas) — comportamento hidrologico em bacias urbanas brasileiras e uso de parametros de superficie.
-- **Akan, A. O. & Houghtalen, R. J.** — *Urban Hydrology, Hydraulics, and Stormwater Quality* (parametros tipicos em drenagem urbana).
+- **Chow, V. T. (1959)** — *Open-Channel Hydraulics* (faixas clássicas de `n` de Manning para canais e superfícies).
+- **USDA-SCS / NRCS** — manuais hidrológicos e parâmetros de infiltração para diferentes coberturas e condições de solo.
+- **Tucci, C. E. M.** (drenagem urbana, edições diversas) — comportamento hidrológico em bacias urbanas brasileiras e uso de parâmetros de superfície.
+- **Akan, A. O. & Houghtalen, R. J.** — *Urban Hydrology, Hydraulics, and Stormwater Quality* (parâmetros típicos em drenagem urbana).
 
-**Nota tecnica:** estes valores sao **pontos de partida** para evento unico; devem ser ajustados por calibracao local (chuva-vazao/nivel observado), considerando compactacao, saturacao antecedente, declividade, cobertura vegetal e estado de conservacao das superficies/canais.
+**Nota técnica:** estes valores são **pontos de partida** para evento único; devem ser ajustados por calibração local (chuva-vazão/nível observado), considerando compactação, saturação antecedente, declividade, cobertura vegetal e estado de conservação das superfícies/canais.
         """
     )
 
-elif pagina == "Instrucoes":
-    st.title("Instrucoes de uso")
+elif pagina == "Instruções":
+    st.title("Instruções de uso")
     st.markdown(
         """
 ### Fluxo recomendado
 
-1. **Configuracao** (barra lateral): defina o **intervalo de registro da chuva**, o **passo de integracao** (pode ser menor), a **duracao da chuva**, o **tempo de recessao** (P=0 apos a chuva) e a **unidade** (mm ou mm/h).
-2. **Parametros do canal**: largura, declividade, Manning e nivel de base (cota opcional).
-3. **Areas de contribuicao (AC)**: informe geometria, declividade, montantes (`ACs_montante_ids` com IDs separados por `;`) e lamina inicial `h0_m`. A rede deve ser **convergente**: cada AC (exceto o exutorio) tem um unico destino a jusante; o grafo interativo ajuda a conferir.
-4. **Unidades de uso do solo (US)**: preencha areas e parametros por classe. Com a opcao automatica ativada, `Infiltracao_eq_mm_h` e `n_eq` sao calculados por media ponderada pela area da AC.
-5. **Chuva**: edite a tabela de registros. O instante `t = 0` e apenas condicao inicial (sem chuva no balanco). Cada valor no **fim** de um intervalo representa a precipitacao ocorrida no intervalo anterior. A intensidade e mantida constante dentro do intervalo de registro, mesmo com passo interno menor.
-6. Clique em **Rodar simulacao** e visualize os hidrogramas de nivel e vazao. Baixe os resultados em Excel se desejar.
-7. Aba **Balanco Hidrico**: diagnostico de fechamento numerico de massa (por AC e bacia; chuva vs recessao). Tolerancia configuravel; nao substitui a validacao fisica.
-8. Aba **Validacao**: informe niveis medidos em campo (grade ou CSV) e compare com a serie simulada (NSE, R2, RMSE, etc.).
-9. Aba **Sugestao de calibracao**: consulte faixas de infiltracao, n na superficie e n do canal antes de preencher a simulacao.
+1. **Configuração** (barra lateral): defina o **intervalo de registro da chuva**, o **passo de integração** (pode ser menor), a **duração da chuva**, o **tempo de recessão** (P=0 após a chuva) e a **unidade** (mm ou mm/h).
+2. **Parâmetros do canal**: largura, declividade, Manning e nível de base (cota opcional).
+3. **Áreas de contribuição (AC)**: informe geometria, declividade, montantes (`ACs_montante_ids` com IDs separados por `;`) e lâmina inicial `h0_m`. A rede deve ser **convergente**: cada AC (exceto o exutório) tem um único destino a jusante; o grafo interativo ajuda a conferir.
+4. **Unidades de uso do solo (US)**: preencha áreas e parâmetros por classe. Com a opção automática ativada, `Infiltracao_eq_mm_h` e `n_eq` são calculados por média ponderada pela área da AC.
+5. **Chuva**: edite a tabela de registros. O instante `t = 0` é apenas condição inicial (sem chuva no balanço). Cada valor no **fim** de um intervalo representa a precipitação ocorrida no intervalo anterior. A intensidade é mantida constante dentro do intervalo de registro, mesmo com passo interno menor.
+6. Clique em **Rodar simulação** e visualize os hidrogramas de nível e vazão. Baixe os resultados em Excel se desejar.
+7. Aba **Balanço Hídrico**: diagnóstico de fechamento numérico de massa (por AC e bacia; chuva vs recessão). Tolerância configurável; não substitui a validação física.
+8. Aba **Validação**: informe níveis medidos em campo (grade ou CSV) e compare com a série simulada (NSE, R², RMSE, etc.).
+9. Aba **Sugestão de calibração**: consulte faixas de infiltração, n na superfície e n do canal antes de preencher a simulação.
 
-### Observacoes
+### Observações
 
-- O intervalo dos registros de precipitacao e independente do passo interno de integracao (ex.: registros a cada 600 s e integracao a 60 s).
-- Simulacoes antigas com coluna `P_mm_h` sao interpretadas como **intensidade em mm/h**.
-- A infiltracao usa balanco volumetrico (lamina + chuva + montante); a agua armazenada pode infiltrar apos o fim da chuva. Opcoes: capacidade constante ou Horton.
-- A propagacao superficial usa Euler implicito volumetrico com Manning em plano inclinado (`V + dt·Q(V) = V_disp`, bissecao); a conversao para nivel no canal usa Manning em secao retangular.
-- A transferencia entre ACs **no mesmo passo interno** e uma **aproximacao numerica de reservatorios conectados** (ordenacao montante→jusante), **nao** uma simulacao hidraulica explicita dos canais de ligacao.
-- Se alterar `Numero de ACs`, recarregue a pagina se necessario para atualizar linhas padrao das US.
+- O intervalo dos registros de precipitação é independente do passo interno de integração (ex.: registros a cada 600 s e integração a 60 s).
+- Simulações antigas com coluna `P_mm_h` são interpretadas como **intensidade em mm/h**.
+- A infiltração usa balanço volumétrico (lâmina + chuva + montante); a água armazenada pode infiltrar após o fim da chuva. Opções: capacidade constante ou Horton.
+- A propagação superficial usa Euler implícito volumétrico com Manning em plano inclinado (`V + dt·Q(V) = V_disp`, bisseção); a conversão para nível no canal usa Manning em seção retangular.
+- A transferência entre ACs **no mesmo passo interno** é uma **aproximação numérica de reservatórios conectados** (ordenação montante→jusante), **não** uma simulação hidráulica explícita dos canais de ligação.
+- Se alterar `Número de ACs`, recarregue a página se necessário para atualizar linhas padrão das US.
         """
     )
 
-elif pagina == "Descricao das variaveis":
-    st.title("Descricao das variaveis e termos")
-    st.caption("Tabela de referencia alinhada a metodologia do modelo.")
+elif pagina == "Descrição das variáveis":
+    st.title("Descrição das variáveis e termos")
+    st.caption("Tabela de referência alinhada à metodologia do modelo.")
     st.dataframe(
         pd.DataFrame(GLOSSARIO_ROWS),
         use_container_width=True,
         hide_index=True,
     )
 
-elif pagina == "Simulacoes salvas":
-    st.title("Simulacoes salvas")
-    st.caption("Carregue, exclua e reutilize simulacoes anteriores.")
+elif pagina == "Simulações salvas":
+    st.title("Simulações salvas")
+    st.caption("Carregue, exclua e reutilize simulações anteriores.")
 
     store = st.session_state.get("sim_store", {"last_id": None, "items": []})
     items = store.get("items", [])
     if not items:
-        st.info("Nenhuma simulacao salva ainda. Salve uma simulacao na aba **Simulacao**.")
+        st.info("Nenhuma simulação salva ainda. Salve uma simulação na aba **Simulação**.")
     else:
         for item in sorted(items, key=lambda x: x.get("created_at", ""), reverse=True):
-            titulo = item.get("titulo", "Sem titulo")
+            titulo = item.get("titulo", "Sem título")
             created = item.get("created_at", "")
             with st.container(border=True):
                 st.markdown(f"**{titulo}**")
                 st.caption(f"Criada em: {created}")
                 c1, c2 = st.columns(2)
-                if c1.button("Usar nesta simulacao", key=f"load_{item.get('id')}"):
+                if c1.button("Usar nesta simulação", key=f"load_{item.get('id')}"):
                     aplicar_payload_em_session(item)
                     st.session_state["sim_store"]["last_id"] = item.get("id")
                     salvar_simulacoes_salvas(st.session_state["sim_store"])
-                    st.session_state["pending_page"] = "Simulacao"
+                    st.session_state["pending_page"] = "Simulação"
                     st.rerun()
                 if c2.button("Excluir", key=f"del_{item.get('id')}"):
                     st.session_state["sim_store"]["items"] = [
@@ -2264,22 +2317,22 @@ elif pagina == "Simulacoes salvas":
                     salvar_simulacoes_salvas(st.session_state["sim_store"])
                     st.rerun()
 
-elif pagina == "Validacao":
-    st.title("Validacao: nivel observado vs simulado")
+elif pagina == "Validação":
+    st.title("Validação: nível observado vs simulado")
     st.caption(
-        "Compare niveis medidos em campo com a serie simulada no exutorio. "
-        "O Nash-Sutcliffe (NSE) e o mesmo indicador frequentemente chamado de Nash."
+        "Compare níveis medidos em campo com a série simulada no exutório. "
+        "O Nash-Sutcliffe (NSE) é o mesmo indicador frequentemente chamado de Nash."
     )
 
     df_sim = st.session_state.get("df_saida_validacao")
     if df_sim is None:
         st.warning(
-            "Nenhuma simulacao disponivel. Va em **Simulacao**, preencha os dados e clique em **Rodar simulacao**."
+            "Nenhuma simulação disponível. Vá em **Simulação**, preencha os dados e clique em **Rodar simulação**."
         )
     else:
         st.info(
-            f"Serie simulada carregada: **{len(df_sim)}** passos. "
-            "Unidade de nivel: metros (mesma referencia do modelo)."
+            f"Série simulada carregada: **{len(df_sim)}** passos. "
+            "Unidade de nível: metros (mesma referência do modelo)."
         )
 
         tab_manual, tab_csv = st.tabs(["Entrada manual na grade", "Importar CSV"])
@@ -2310,7 +2363,7 @@ elif pagina == "Validacao":
                 disabled=["Passo", "Tempo_s", "Nivel_sim_m"],
                 column_config={
                     "Nivel_obs_m": st.column_config.NumberColumn(
-                        "Nivel observado (m)",
+                        "Nível observado (m)",
                         help="Medicao de campo no mesmo instante de Tempo_s (deixe vazio para ignorar o passo nas metricas).",
                         format="%.4f",
                     ),
@@ -2363,7 +2416,7 @@ elif pagina == "Validacao":
                             how="left",
                         )
                         st.session_state["df_validacao_obs"] = merged
-                        st.success(f"Importados {len(df_up)} pontos; alinhados por Tempo_s a grade da simulacao.")
+                        st.success(f"Importados {len(df_up)} pontos; alinhados por Tempo_s à grade da simulação.")
                 except Exception as exc:
                     st.error(f"Erro ao ler CSV: {exc}")
 
@@ -2374,7 +2427,7 @@ elif pagina == "Validacao":
             calibracao_habilitada = n_valid >= 2
 
             if not calibracao_habilitada:
-                st.warning("Informe pelo menos **2** valores de nivel observado para calcular metricas e habilitar a calibracao.")
+                st.warning("Informe pelo menos **2** valores de nível observado para calcular métricas e habilitar a calibração.")
             else:
                 obs = df_obs.loc[mask, "Nivel_obs_m"].astype(float).values
                 sim = df_obs.loc[mask, "Nivel_sim_m"].astype(float).values
@@ -2391,10 +2444,10 @@ elif pagina == "Validacao":
                 m3.metric("RMSE (m)", f"{err_rmse:.4f}")
                 m4.metric("MAE (m)", f"{err_mae:.4f}")
                 st.metric("Vies medio (sim - obs) (m)", f"{vb:.4f}")
-                st.caption("Vies medio: media de (simulado - observado) nos passos com observacao.")
+                st.caption("Viés médio: média de (simulado - observado) nos passos com observação.")
 
             st.divider()
-            st.subheader("Calibracao automatica (grade Horton)")
+            st.subheader("Calibração automática (grade Horton)")
             st.caption(
                 "Varre combinacoes de `k` e `f0/fc`, simula novamente e ranqueia automaticamente por `Score_nse_pico = (1 - NSE) + |erro_pico_pct|/100`."
             )
@@ -2412,10 +2465,10 @@ elif pagina == "Validacao":
             top_n = st.number_input("Top resultados exibidos", min_value=3, max_value=50, value=10, step=1, key="cal_top_n")
 
             if st.button(
-                "Rodar calibracao automatica",
+                "Rodar calibração automática",
                 key="btn_calibracao_horton",
                 disabled=not calibracao_habilitada,
-                help="Disponivel apos informar pelo menos 2 niveis observados validos.",
+                help="Disponível após informar pelo menos 2 níveis observados válidos.",
             ):
                 try:
                     k_vals = _montar_grade_parametros(float(k_min), float(k_max), float(k_step))
@@ -2429,7 +2482,7 @@ elif pagina == "Validacao":
                         ac_loaded = st.session_state.get("ac_df_loaded")
                         chuva_loaded = st.session_state.get("chuva_df_loaded")
                         if ac_loaded is None or chuva_loaded is None or len(ac_loaded) == 0 or len(chuva_loaded) == 0:
-                            st.error("Dados de simulacao nao encontrados. Rode a simulacao novamente antes de calibrar.")
+                            st.error("Dados de simulação não encontrados. Rode a simulação novamente antes de calibrar.")
                         else:
                             ac_cal = ac_loaded.copy()
                             ac_cal["ID_AC"] = pd.to_numeric(ac_cal["ID_AC"], errors="coerce").astype(int)
@@ -2468,18 +2521,18 @@ elif pagina == "Validacao":
                                 tempo_recessao_s=rec_cal_s,
                             )
                             if df_rank.empty:
-                                st.error("Nao foi possivel calibrar: sem pontos observados suficientes apos alinhamento por Tempo_s.")
+                                st.error("Não foi possível calibrar: sem pontos observados suficientes após alinhamento por Tempo_s.")
                             else:
                                 st.session_state["df_calibracao_horton"] = df_rank
                                 st.success(
-                                    f"Calibracao concluida com {len(df_rank)} combinacoes validas."
+                                    f"Calibração concluída com {len(df_rank)} combinações válidas."
                                 )
                 except Exception as exc:
-                    st.error(f"Erro na calibracao automatica: {exc}")
+                    st.error(f"Erro na calibração automática: {exc}")
 
             df_rank = st.session_state.get("df_calibracao_horton")
             if isinstance(df_rank, pd.DataFrame) and not df_rank.empty:
-                st.markdown("**Melhor combinacao encontrada**")
+                st.markdown("**Melhor combinação encontrada**")
                 best = df_rank.iloc[0]
                 cbest1, cbest2, cbest3, cbest4 = st.columns(4)
                 cbest1.metric("k (1/h)", f"{best['k_h_inv']:.3f}")
@@ -2541,20 +2594,20 @@ elif pagina == "Validacao":
                             df_saida_best, st.session_state.get("df_validacao_obs")
                         )
                         st.success(
-                            "Melhor conjunto aplicado. Serie simulada da validacao foi atualizada com os novos parametros."
+                            "Melhor conjunto aplicado. Série simulada da validação foi atualizada com os novos parâmetros."
                         )
                         st.rerun()
                     except Exception as exc:
                         st.error(f"Erro ao aplicar melhor conjunto: {exc}")
 
             if calibracao_habilitada:
-                st.subheader("Grafico comparativo")
+                st.subheader("Gráfico comparativo")
                 fig = go.Figure()
                 fig.add_trace(
                     go.Scatter(
                         x=df_obs["Tempo_s"],
                         y=df_obs["Nivel_sim_m"],
-                        name="Nivel simulado",
+                        name="Nível simulado",
                         mode="lines",
                         line=dict(color="#1f77b4", width=2),
                     )
@@ -2563,21 +2616,21 @@ elif pagina == "Validacao":
                     go.Scatter(
                         x=df_obs.loc[mask, "Tempo_s"],
                         y=obs,
-                        name="Nivel observado",
+                        name="Nível observado",
                         mode="markers+lines",
                         line=dict(color="#d62728", dash="dot"),
                         marker=dict(size=8),
                     )
                 )
                 fig.update_layout(
-                    title="Nivel no canal: observado vs simulado",
+                    title="Nível no canal: observado vs simulado",
                     xaxis_title="Tempo (s)",
-                    yaxis_title="Nivel (m)",
+                    yaxis_title="Nível (m)",
                     legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99),
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
-                st.subheader("Tabela de comparacao (passos com observacao)")
+                st.subheader("Tabela de comparação (passos com observação)")
                 st.dataframe(
                     df_obs.loc[mask].reset_index(drop=True),
                     use_container_width=True,
@@ -2585,20 +2638,20 @@ elif pagina == "Validacao":
                 )
         else:
             st.divider()
-            st.subheader("Calibracao automatica (grade Horton)")
+            st.subheader("Calibração automática (grade Horton)")
             st.caption(
-                "Preencha dados observados na grade ou via CSV para habilitar a calibracao automatica."
+                "Preencha dados observados na grade ou via CSV para habilitar a calibração automática."
             )
             st.button(
-                "Rodar calibracao automatica",
+                "Rodar calibração automática",
                 key="btn_calibracao_horton_sem_dados",
                 disabled=True,
-                help="Disponivel apos informar pelo menos 2 niveis observados validos.",
+                help="Disponível após informar pelo menos 2 níveis observados válidos.",
             )
 
 else:
-    st.title("Modelo Hidrologico Urbano - Escoamento e Nivel no Canal")
-    st.caption("Versao web local para simulacao de evento unico de chuva-vazao.")
+    st.title("Modelo Hidrológico Urbano - Escoamento e Nível no Canal")
+    st.caption("Versão web local para simulação de evento único de chuva-vazão.")
 
     # Defaults (ou ultimo salvo carregado)
     st.session_state.setdefault("dt_seg", 600)
@@ -2644,23 +2697,23 @@ else:
         st.session_state["_show_clear_notice"] = True
 
     if st.session_state.get("_show_clear_notice"):
-        st.info("Campos da simulacao limpos. Preencha novamente para iniciar do zero.")
+        st.info("Campos da simulação limpos. Preencha novamente para iniciar do zero.")
         st.session_state["_show_clear_notice"] = False
 
     with st.sidebar:
-        st.header("Configuracao")
+        st.header("Configuração")
         intervalo_registro_s = st.number_input(
             "Intervalo de registro da chuva (s)",
             min_value=5,
             step=5,
             key="intervalo_registro_s",
-            help="Espacamento temporal dos registros de precipitacao (ex.: 600 s).",
+            help="Espaçamento temporal dos registros de precipitação (ex.: 600 s).",
         )
         opcoes_dt = passos_integracao_validos(int(intervalo_registro_s))
         if not opcoes_dt:
             st.error(
-                "Nenhum passo de integracao permitido divide o intervalo de registro. "
-                f"Use um intervalo multiplo de: {', '.join(str(x) for x in PASSOS_INTEGRACAO_PERMITIDOS)}."
+                "Nenhum passo de integração permitido divide o intervalo de registro. "
+                f"Use um intervalo múltiplo de: {', '.join(str(x) for x in PASSOS_INTEGRACAO_PERMITIDOS)}."
             )
             dt_integracao_s = int(intervalo_registro_s)
         else:
@@ -2668,7 +2721,7 @@ else:
             if atual_dt not in opcoes_dt:
                 st.session_state["dt_integracao_s"] = opcoes_dt[0]
             dt_integracao_s = st.selectbox(
-                "Passo de integracao numerica (s)",
+                "Passo de integração numérica (s)",
                 options=opcoes_dt,
                 key="dt_integracao_s",
                 help="Passo interno do modelo; deve dividir o intervalo de registro.",
@@ -2676,16 +2729,16 @@ else:
         st.session_state["dt_seg"] = int(dt_integracao_s)
         dt_seg = int(dt_integracao_s)
 
-        duracao_min = st.number_input("Duracao da chuva (min)", min_value=5, step=5, key="duracao_min")
+        duracao_min = st.number_input("Duração da chuva (min)", min_value=5, step=5, key="duracao_min")
         tempo_recessao_min = st.number_input(
-            "Tempo de recessao apos a chuva (min)",
+            "Tempo de recessão após a chuva (min)",
             min_value=0.0,
             step=5.0,
             key="tempo_recessao_min",
-            help="Periodo adicional com precipitacao zero para avaliar a recessao.",
+            help="Período adicional com precipitação zero para avaliar a recessão.",
         )
         unidade_chuva = st.radio(
-            "Unidade da precipitacao",
+            "Unidade da precipitação",
             options=[UNIDADE_CHUVA_INTENSIDADE, UNIDADE_CHUVA_ACUMULADA],
             format_func=lambda u: (
                 "Intensidade (mm/h)" if u == UNIDADE_CHUVA_INTENSIDADE else "Acumulado por intervalo (mm)"
@@ -2694,15 +2747,15 @@ else:
             horizontal=False,
         )
         st.divider()
-        usar_horton = st.checkbox("Usar infiltracao variavel (Horton)", key="usar_horton")
+        usar_horton = st.checkbox("Usar infiltração variável (Horton)", key="usar_horton")
         if usar_horton:
-            st.caption("Modo avancado de infiltracao para calibracao.")
+            st.caption("Modo avançado de infiltração para calibração.")
             horton_k_h_inv = st.number_input("k de Horton (1/h)", min_value=0.0, step=0.1, key="horton_k_h_inv")
             horton_f0_multiplicador = st.number_input(
                 "f0/fc de Horton", min_value=1.0, step=0.1, key="horton_f0_multiplicador"
             )
         else:
-            st.caption("Modo metodologia: infiltracao constante por US/AC.")
+            st.caption("Modo metodologia: infiltração constante por US/AC.")
             horton_k_h_inv = float(st.session_state.get("horton_k_h_inv", 2.5))
             horton_f0_multiplicador = float(st.session_state.get("horton_f0_multiplicador", 1.0))
 
@@ -2713,26 +2766,26 @@ else:
         tempo_total_s = tempo_chuva_s + float(tempo_recessao_min) * 60.0
         n_passos_int = int(round(tempo_total_s / float(dt_integracao_s))) + 1
         st.write(f"Registros de chuva: {n_registros} (inclui t=0)")
-        st.write(f"Passos de integracao: {n_passos_int} (inclui t=0 como CI)")
+        st.write(f"Passos de integração: {n_passos_int} (inclui t=0 como CI)")
         st.caption(
-            "t=0 = condicoes iniciais. Cada registro no fim do intervalo representa a chuva do intervalo anterior."
+            "t=0 = condições iniciais. Cada registro no fim do intervalo representa a chuva do intervalo anterior."
         )
 
-    st.subheader("1) Parametros do canal")
+    st.subheader("1) Parâmetros do canal")
     col1, col2, col3, col4 = st.columns(4)
     b_canal = col1.number_input("B_canal (m)", min_value=0.1, key="b_canal")
     s_canal = col2.number_input("S_canal (m/m)", min_value=0.0001, format="%.4f", key="s_canal")
     n_canal = col3.number_input("n_canal", min_value=0.001, format="%.3f", key="n_canal")
     nivel_base = col4.number_input("Nivel base (m)", format="%.3f", key="nivel_base")
 
-    st.subheader("2) Areas de contribuicao (AC)")
+    st.subheader("2) Áreas de contribuição (AC)")
     st.caption(
-        "Rede convergente: cada AC (exceto o exutorio) deve ter um unico destino a jusante. "
-        "A transferencia de vazao entre ACs no mesmo passo interno e uma aproximacao de "
-        "reservatorios conectados, nao uma hidraulica explicita dos canais de ligacao."
+        "Rede convergente: cada AC (exceto o exutório) deve ter um único destino a jusante. "
+        "A transferência de vazão entre ACs no mesmo passo interno é uma aproximação de "
+        "reservatórios conectados, não uma hidráulica explícita dos canais de ligação."
     )
-    n_ac = st.number_input("Numero de ACs", min_value=1, max_value=20, step=1, key="n_ac")
-    exutorio_id = st.number_input("ID da AC de exutorio", min_value=1, max_value=20, step=1, key="exutorio_id")
+    n_ac = st.number_input("Número de ACs", min_value=1, max_value=20, step=1, key="n_ac")
+    exutorio_id = st.number_input("ID da AC de exutório", min_value=1, max_value=20, step=1, key="exutorio_id")
 
     # Padrao convergente: ACs 1..n-1 → exutorio n (sem bifurcacao da mesma vazao)
     exut_padrao = int(n_ac)
@@ -2779,19 +2832,19 @@ else:
     try:
         _ac_ord_ui, rede_ui = validar_e_preparar_rede_ac(ac_df, int(exutorio_id))
         st.success(
-            f"Rede valida: {rede_ui['n_ac']} ACs contribuem ao exutorio {rede_ui['exutorio_id']} "
-            f"sem bifurcacao de vazao (ordenacao montante→jusante: {rede_ui['ordem_ids']})."
+            f"Rede válida: {rede_ui['n_ac']} ACs contribuem ao exutório {rede_ui['exutorio_id']} "
+            f"sem bifurcação de vazão (ordenação montante→jusante: {rede_ui['ordem_ids']})."
         )
         st.plotly_chart(fig_rede_conectividade_ac(rede_ui), use_container_width=True)
     except Exception as exc_rede:
         st.error(str(exc_rede))
 
-    st.subheader("3) Unidades de uso do solo (US) - editavel")
+    st.subheader("3) Unidades de uso do solo (US) - editável")
     usar_us_para_eq = st.checkbox(
         "Calcular Infiltracao_eq_mm_h e n_eq automaticamente a partir das US",
         key="usar_us_para_eq",
     )
-    classes_padrao = ["Superficie impermeavel", "Gramado", "Vegetacao arborea"]
+    classes_padrao = ["Superfície impermeável", "Gramado", "Vegetação arbórea"]
     rows_us = []
     for ac_id in range(1, int(n_ac) + 1):
         if ac_id == 1:
@@ -2828,7 +2881,7 @@ else:
 
     if usar_us_para_eq:
         ac_preview = calcular_parametros_equivalentes_por_us(ac_df, us_df)
-        st.caption("Parametros equivalentes calculados por US (ponderados pela area da AC).")
+        st.caption("Parâmetros equivalentes calculados por US (ponderados pela área da AC).")
         st.dataframe(
             ac_preview[["ID_AC", "Infiltracao_eq_mm_h", "n_eq"]],
             use_container_width=True,
@@ -2840,11 +2893,11 @@ else:
     st.subheader("4) Chuva")
     st.caption(
         "Unidade selecionada na barra lateral. O valor no fim de cada intervalo de registro "
-        "representa a precipitacao ocorrida no intervalo anterior. Em t=0 nao ha avanco do balanco."
+        "representa a precipitação ocorrida no intervalo anterior. Em t=0 não há avanço do balanço."
     )
     c_t1, c_t2 = st.columns(2)
-    hora_inicio_str = c_t1.text_input("Horario de inicio do evento (HH:MM)", key="hora_inicio_evento")
-    hora_fim_str = c_t2.text_input("Horario de termino do evento (HH:MM)", key="hora_fim_evento")
+    hora_inicio_str = c_t1.text_input("Horário de início do evento (HH:MM)", key="hora_inicio_evento")
+    hora_fim_str = c_t2.text_input("Horário de término do evento (HH:MM)", key="hora_fim_evento")
     horario_ok = True
     try:
         inicio_h, inicio_m = [int(x) for x in hora_inicio_str.split(":")]
@@ -2857,12 +2910,12 @@ else:
         duracao_modelo_min = int(tempo_chuva_s / 60)
         if duracao_horario_min != duracao_modelo_min:
             st.warning(
-                f"Duracao por horario ({duracao_horario_min} min) difere da duracao da chuva no modelo "
-                f"({duracao_modelo_min} min). O eixo sera discretizado pelo passo de integracao a partir do inicio."
+                f"Duração por horário ({duracao_horario_min} min) difere da duração da chuva no modelo "
+                f"({duracao_modelo_min} min). O eixo será discretizado pelo passo de integração a partir do início."
             )
     except Exception:
         horario_ok = False
-        st.error("Formato de horario invalido. Use HH:MM, ex.: 12:00.")
+        st.error("Formato de horário inválido. Use HH:MM, ex.: 12:00.")
 
     tempo_vec = np.arange(n_registros) * float(intervalo_registro_s)
     col_chuva = "P_mm" if unidade_chuva == UNIDADE_CHUVA_ACUMULADA else "P_mm_h"
@@ -2920,21 +2973,21 @@ else:
         vals_ui = extrair_valores_chuva_df(chuva_df_edit, unidade_chuva)
         met_p = metricas_precipitacao(vals_ui, unidade_chuva, float(intervalo_registro_s))
         m1, m2, m3 = st.columns(3)
-        m1.metric("Precipitacao acumulada total (mm)", f"{met_p['P_acum_mm']:.2f}")
-        m2.metric("Intensidade maxima (mm/h)", f"{met_p['I_max_mm_h']:.2f}")
-        m3.metric("Duracao do evento (min)", f"{met_p['Duracao_evento_min']:.1f}")
+        m1.metric("Precipitação acumulada total (mm)", f"{met_p['P_acum_mm']:.2f}")
+        m2.metric("Intensidade máxima (mm/h)", f"{met_p['I_max_mm_h']:.2f}")
+        m3.metric("Duração do evento (min)", f"{met_p['Duracao_evento_min']:.1f}")
         if float(tempo_recessao_min) > 0:
             st.caption(
-                f"Recessao configurada: {float(tempo_recessao_min):.1f} min com P=0 apos o fim da chuva "
-                f"(horizonte total de simulacao: {tempo_total_s / 60.0:.1f} min)."
+                f"Recessão configurada: {float(tempo_recessao_min):.1f} min com P=0 após o fim da chuva "
+                f"(horizonte total de simulação: {tempo_total_s / 60.0:.1f} min)."
             )
     except Exception:
         pass
 
-    st.subheader("5) Gestao da simulacao")
-    st.text_input("Titulo da simulacao para salvar", key="titulo_salvar", placeholder="Ex.: Evento 12/03/2026")
+    st.subheader("5) Gestão da simulação")
+    st.text_input("Título da simulação para salvar", key="titulo_salvar", placeholder="Ex.: Evento 12/03/2026")
     g1, g2 = st.columns(2)
-    if g1.button("Salvar simulacao"):
+    if g1.button("Salvar simulação"):
         payload = gerar_payload_simulacao(
             titulo=st.session_state.get("titulo_salvar", ""),
             dt_seg=int(dt_seg),
@@ -2963,16 +3016,16 @@ else:
         store["last_id"] = payload["id"]
         st.session_state["sim_store"] = store
         salvar_simulacoes_salvas(store)
-        st.success("Simulacao salva com sucesso.")
+        st.success("Simulação salva com sucesso.")
 
-    if g2.button("Limpar simulacao"):
+    if g2.button("Limpar simulação"):
         st.session_state["_clear_sim_requested"] = True
         st.rerun()
 
-    if st.button("Rodar simulacao", type="primary"):
+    if st.button("Rodar simulação", type="primary"):
         try:
             if not horario_ok:
-                st.error("Corrija os horarios de inicio/fim antes de rodar a simulacao.")
+                st.error("Corrija os horários de início/fim antes de rodar a simulação.")
                 st.stop()
             erros = validar_campos_obrigatorios(
                 dt_seg=int(dt_seg),
@@ -2993,7 +3046,7 @@ else:
                 tempo_recessao_min=float(tempo_recessao_min),
             )
             if erros:
-                st.error("A simulacao nao pode rodar. Corrija os campos obrigatorios:")
+                st.error("A simulação não pode rodar. Corrija os campos obrigatórios:")
                 for e in erros:
                     st.markdown(f"- {e}")
                 st.stop()
@@ -3038,41 +3091,33 @@ else:
                 "intervalo_registro_s": float(intervalo_registro_s),
             }
 
-            st.success("Simulacao concluida.")
+            st.success("Simulação concluída.")
             met_run = metricas_precipitacao(
                 chuva_regs, str(unidade_chuva), float(intervalo_registro_s)
             )
             r1, r2, r3 = st.columns(3)
-            r1.metric("Precipitacao acumulada total (mm)", f"{met_run['P_acum_mm']:.2f}")
-            r2.metric("Intensidade maxima (mm/h)", f"{met_run['I_max_mm_h']:.2f}")
-            r3.metric("Duracao do evento (min)", f"{met_run['Duracao_evento_min']:.1f}")
+            r1.metric("Precipitação acumulada total (mm)", f"{met_run['P_acum_mm']:.2f}")
+            r2.metric("Intensidade máxima (mm/h)", f"{met_run['I_max_mm_h']:.2f}")
+            r3.metric("Duração do evento (min)", f"{met_run['Duracao_evento_min']:.1f}")
 
             tempo_hhmm = montar_tempo_evento_hhmm(len(df_saida), int(dt_integracao_s), hora_inicio_str)
             df_saida = df_saida.copy()
             df_saida["Tempo_hhmm"] = tempo_hhmm
             c1, c2, c3 = st.columns(3)
-            c1.metric("Pico de vazao (m3/s)", f"{df_saida['Q_ex_m3_s'].max():.4f}")
-            c2.metric("Pico de nivel (m)", f"{df_saida['Nivel_m'].max():.4f}")
-            c3.metric("Horario do pico", f"{df_saida.loc[df_saida['Nivel_m'].idxmax(), 'Tempo_hhmm']}")
+            c1.metric("Pico de vazão (m³/s)", f"{df_saida['Q_ex_m3_s'].max():.4f}")
+            c2.metric("Pico de nível (m)", f"{df_saida['Nivel_m'].max():.4f}")
+            c3.metric("Horário do pico", f"{df_saida.loc[df_saida['Nivel_m'].idxmax(), 'Tempo_hhmm']}")
 
-            fig_nivel = px.line(
-                df_saida,
-                x="Tempo_hhmm",
-                y="Nivel_m",
-                markers=False,
-                title="Hidrograma de nivel no canal",
-            )
-            fig_nivel.update_layout(xaxis_title="Horario", yaxis_title="Nivel (m)")
-            st.plotly_chart(fig_nivel, use_container_width=True)
+            st.plotly_chart(fig_nivel_com_hietograma(df_saida), use_container_width=True)
 
-            fig_q = px.line(df_saida, x="Tempo_hhmm", y="Q_ex_m3_s", title="Hidrograma de vazao no exutorio")
-            fig_q.update_layout(xaxis_title="Horario", yaxis_title="Vazao (m3/s)")
+            fig_q = px.line(df_saida, x="Tempo_hhmm", y="Q_ex_m3_s", title="Hidrograma de vazão no exutório")
+            fig_q.update_layout(xaxis_title="Horário", yaxis_title="Vazão (m³/s)")
             st.plotly_chart(fig_q, use_container_width=True)
 
-            st.subheader("Saida - exutorio")
+            st.subheader("Saída - exutório")
             st.dataframe(df_saida, use_container_width=True, hide_index=True)
 
-            st.subheader("Saida detalhada por AC")
+            st.subheader("Saída detalhada por AC")
             st.dataframe(df_ac_detalhe, use_container_width=True, hide_index=True)
 
             tol_xlsx = float(st.session_state.get("tol_balanco_m3", TOL_BALANCO_HIDRICO_M3_DEFAULT))
@@ -3093,5 +3138,5 @@ else:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         except Exception as exc:
-            st.error(f"Erro na simulacao: {exc}")
+            st.error(f"Erro na simulação: {exc}")
 
