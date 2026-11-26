@@ -5,6 +5,16 @@ Versionamento semântico adaptado ao ciclo do MHU (`MAJOR.MINOR`).
 
 ## [Unreleased] — MHU 1.1 (em preparação)
 
+### Changed — conectividade hidrológica entre ACs
+
+- Validação automática da rede convergente: IDs duplicados, montantes inexistentes/repetidos, auto-referência, ciclos, ACs desconectadas do exutório, múltiplos destinos a jusante, duplicação de volumes e exutório inválido.
+- Cada AC (exceto o exutório) possui **um único destino** a jusante; a mesma vazão não é transferida integralmente a duas ACs.
+- Exutório inválido **não** é substituído silenciosamente pela última AC.
+- Ordenação topológica montante→jusante preservada; checagem de conservação `ΣQ_in = ΣQ_out(com destino)` em cada passo.
+- Grafo interativo Plotly da rede na interface Streamlit.
+- Documentado: transferência no mesmo passo = aproximação de reservatórios conectados (não hidráulica explícita de canais).
+- Teste `test_rede_conectividade.py` (inclui 14 ACs → exutório sem duplicação).
+
 ### Changed — propagação superficial implícita conservativa
 
 - Equação volumétrica: `V_novo + dt·Q(V_novo) = V_disponivel` com Manning `Q=(W/n)·(V/A)^(5/3)·√S`, `W=A/L`.

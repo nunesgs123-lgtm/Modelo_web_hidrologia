@@ -24,7 +24,15 @@ GLOSSARIO_ROWS = [
     {"Termo": "Area_m2", "Unidade": "m2", "Descricao": "Area de contribuicao da AC."},
     {"Termo": "L_m", "Unidade": "m", "Descricao": "Comprimento caracteristico de escoamento na AC."},
     {"Termo": "S_m_m", "Unidade": "m/m", "Descricao": "Declividade da superficie de escoamento na AC."},
-    {"Termo": "ACs_montante_ids", "Unidade": "-", "Descricao": "IDs das AC imediatamente a montante, separados por ponto e virgula (ex.: 1;2)."},
+    {
+        "Termo": "ACs_montante_ids",
+        "Unidade": "-",
+        "Descricao": (
+            "IDs das AC imediatamente a montante, separados por `;` (ex.: 1;2). "
+            "Rede convergente: cada AC (exceto o exutorio) tem um unico destino a jusante. "
+            "A transferencia no mesmo passo e aproximacao de reservatorios conectados, nao hidraulica explicita de canais."
+        ),
+    },
     {"Termo": "h0_m", "Unidade": "m", "Descricao": "Lamina inicial de agua superficial na AC (condicao em t=0)."},
     {"Termo": "Infiltracao_eq_mm_h", "Unidade": "mm/h", "Descricao": "Taxa de infiltracao equivalente ponderada por area de US."},
     {"Termo": "n_eq", "Unidade": "-", "Descricao": "Coeficiente de Manning equivalente ponderado por area de US."},
@@ -489,57 +497,335 @@ def montar_tempo_evento_hhmm(n_steps: int, dt_seg: int, hora_inicio: str) -> lis
     return [(t0 + timedelta(seconds=i * dt_seg)).strftime("%H:%M") for i in range(n_steps)]
 
 
-def parse_upstream_ids(text: str) -> list[int]:
+def parse_upstream_ids(text: str, *, strict: bool = False) -> list[int]:
+    """
+    Interpreta `ACs_montante_ids`.
+    `0`, vazio, nan ou None = sem montante.
+    Com strict=True, tokens invalidos geram ValueError (nao sao ignorados).
+    """
     if text is None:
         return []
     raw = str(text).strip()
-    if raw in {"", "0", "nan", "None"}:
+    if raw.lower() in {"", "0", "nan", "none"}:
         return []
-    ids = []
+    ids: list[int] = []
     for part in raw.split(";"):
         p = part.strip()
-        if p.isdigit():
+        if p == "":
+            continue
+        if p.lower() in {"0", "nan", "none"}:
+            continue
+        if p.isdigit() or (p.startswith("-") and p[1:].isdigit()):
             ids.append(int(p))
+            continue
+        # Aceita "1.0" tipico de planilha
+        try:
+            val = float(p.replace(",", "."))
+            if val.is_integer():
+                ids.append(int(val))
+                continue
+        except Exception:
+            pass
+        if strict:
+            raise ValueError(f"Token invalido em `ACs_montante_ids`: '{p}'. Use inteiros separados por `;`.")
     return ids
 
 
-def ordenar_ac_topologicamente(ac_df: pd.DataFrame) -> pd.DataFrame:
-    """Ordena ACs para garantir montante -> jusante no mesmo passo de tempo."""
+def validar_e_preparar_rede_ac(
+    ac_df: pd.DataFrame,
+    exutorio_id: int,
+) -> tuple[pd.DataFrame, dict]:
+    """
+    Valida rede convergente de ACs e devolve DataFrame ordenado (montante→jusante)
+    mais metadados da topologia.
+
+    Regras: cada AC (exceto o exutorio) possui exatamente um destino a jusante;
+    o exutorio nao possui destino; nao ha bifurcacao da mesma vazao para duas ACs.
+    """
+    if ac_df is None or ac_df.empty:
+        raise ValueError("Tabela de ACs vazia: informe ao menos uma area de contribuicao.")
+
     ac_work = ac_df.copy()
+    if "ID_AC" not in ac_work.columns or "ACs_montante_ids" not in ac_work.columns:
+        raise ValueError("Tabela de ACs deve conter as colunas `ID_AC` e `ACs_montante_ids`.")
+
+    ac_work["ID_AC"] = pd.to_numeric(ac_work["ID_AC"], errors="coerce")
+    if ac_work["ID_AC"].isna().any():
+        raise ValueError("Existem valores nao numericos em `ID_AC`. Corrija os IDs das ACs.")
     ac_work["ID_AC"] = ac_work["ID_AC"].astype(int)
     ac_work = ac_work.reset_index(drop=True)
 
     ac_ids = ac_work["ID_AC"].tolist()
-    id_set = set(ac_ids)
-    idx_by_id = {ac_id: i for i, ac_id in enumerate(ac_ids)}
+    # IDs duplicados
+    vistos: dict[int, int] = {}
+    duplicados = []
+    for i, ac_id in enumerate(ac_ids):
+        if ac_id in vistos:
+            duplicados.append(ac_id)
+        else:
+            vistos[ac_id] = i
+    if duplicados:
+        duniq = sorted(set(duplicados))
+        raise ValueError(
+            f"IDs de AC duplicados na tabela: {duniq}. Cada `ID_AC` deve ser unico."
+        )
 
-    indeg = {ac_id: 0 for ac_id in ac_ids}
-    downstream_adj: dict[int, list[int]] = {ac_id: [] for ac_id in ac_ids}
+    id_set = set(ac_ids)
+    try:
+        exutorio_id = int(exutorio_id)
+    except Exception as exc:
+        raise ValueError(f"Exutorio invalido: `{exutorio_id}` nao e um inteiro.") from exc
+    if exutorio_id not in id_set:
+        raise ValueError(
+            f"Exutorio invalido: AC {exutorio_id} nao existe na tabela de ACs "
+            f"(IDs cadastrados: {sorted(id_set)}). Nenhum exutorio substituto foi assumido."
+        )
+
+    upstream_of: dict[int, list[int]] = {ac_id: [] for ac_id in ac_ids}
+    erros: list[str] = []
 
     for _, row in ac_work.iterrows():
         ac_id = int(row["ID_AC"])
-        for up_id in parse_upstream_ids(row["ACs_montante_ids"]):
-            if up_id in id_set:
-                downstream_adj[up_id].append(ac_id)
-                indeg[ac_id] += 1
+        try:
+            ups_raw = parse_upstream_ids(row["ACs_montante_ids"], strict=True)
+        except ValueError as exc:
+            erros.append(f"AC {ac_id}: {exc}")
+            continue
 
+        # Montantes repetidos na mesma lista
+        if len(ups_raw) != len(set(ups_raw)):
+            reps = sorted({u for u in ups_raw if ups_raw.count(u) > 1})
+            erros.append(
+                f"AC {ac_id}: IDs de montante repetidos em `ACs_montante_ids`: {reps}."
+            )
+
+        ups_unique: list[int] = []
+        for u in ups_raw:
+            if u == ac_id:
+                erros.append(f"AC {ac_id}: referencia a si mesma em `ACs_montante_ids`.")
+                continue
+            if u not in id_set:
+                erros.append(
+                    f"AC {ac_id}: ID de montante inexistente `{u}` "
+                    f"(IDs validos: {sorted(id_set)})."
+                )
+                continue
+            if u not in ups_unique:
+                ups_unique.append(u)
+        upstream_of[ac_id] = ups_unique
+
+    # Destinos a jusante (rede convergente: no maximo um por AC)
+    downstream_of: dict[int, list[int]] = {ac_id: [] for ac_id in ac_ids}
+    for ds_id, ups in upstream_of.items():
+        for up_id in ups:
+            downstream_of[up_id].append(ds_id)
+
+    for ac_id, destinos in downstream_of.items():
+        dest_u = sorted(set(destinos))
+        if len(destinos) != len(dest_u):
+            erros.append(
+                f"AC {ac_id}: destino a jusante duplicado na montagem da rede "
+                f"(destinos brutos={destinos})."
+            )
+        if len(dest_u) > 1:
+            erros.append(
+                f"AC {ac_id}: possui mais de um destino a jusante {dest_u}. "
+                f"Nesta versao a rede deve ser convergente (uma unica transferencia de vazao por AC). "
+                f"A mesma vazao nao pode ser integralmente enviada a duas ACs diferentes."
+            )
+        if ac_id == exutorio_id and dest_u:
+            erros.append(
+                f"Exutorio AC {exutorio_id}: nao pode ter destino a jusante {dest_u}."
+            )
+        if ac_id != exutorio_id and len(dest_u) == 0:
+            erros.append(
+                f"AC {ac_id}: nao possui destino a jusante e nao e o exutorio. "
+                f"Conecte-a (como montante) a exatamente uma AC a jusante ate o exutorio {exutorio_id}."
+            )
+
+    # Ciclos via ordenacao topologica (Kahn)
+    indeg = {ac_id: len(upstream_of[ac_id]) for ac_id in ac_ids}
     fila = deque(sorted([ac_id for ac_id in ac_ids if indeg[ac_id] == 0]))
     ordem_ids: list[int] = []
     while fila:
         atual = fila.popleft()
         ordem_ids.append(atual)
-        for ds_id in sorted(downstream_adj[atual]):
+        for ds_id in sorted(downstream_of[atual]):
             indeg[ds_id] -= 1
             if indeg[ds_id] == 0:
                 fila.append(ds_id)
-
     if len(ordem_ids) != len(ac_ids):
-        raise ValueError(
-            "A rede de ACs possui ciclo nas relacoes de montante. Corrija `ACs_montante_ids` para uma estrutura aciclica."
+        em_ciclo = sorted(set(ac_ids) - set(ordem_ids))
+        erros.append(
+            f"Ciclo na rede de drenagem envolvendo as ACs {em_ciclo}. "
+            f"A estrutura deve ser aciclica (montante→jusante)."
         )
 
+    # Conectividade ao exutorio (caminhando de jusante para montante)
+    alcancadas: set[int] = set()
+    pilha = [exutorio_id]
+    while pilha:
+        cur = pilha.pop()
+        if cur in alcancadas:
+            continue
+        alcancadas.add(cur)
+        pilha.extend(upstream_of.get(cur, []))
+    desconectadas = sorted(set(ac_ids) - alcancadas)
+    if desconectadas:
+        erros.append(
+            f"ACs desconectadas do exutorio {exutorio_id}: {desconectadas}. "
+            f"Toda AC deve contribuir ao exutorio sem ramificacao divergente."
+        )
+
+    # Duplicacao de volumes: cada AC nao-exutorio aparece em exatamente um receptor
+    aparicoes: dict[int, list[int]] = {ac_id: [] for ac_id in ac_ids}
+    for ds_id, ups in upstream_of.items():
+        for u in ups:
+            aparicoes[u].append(ds_id)
+    for ac_id, receptores in aparicoes.items():
+        if ac_id == exutorio_id:
+            continue
+        if len(receptores) > 1:
+            erros.append(
+                f"Duplicacao de volume: AC {ac_id} transfere integralmente para multiplas ACs {sorted(receptores)}."
+            )
+
+    if erros:
+        # Mensagens distintas, preservando ordem
+        raise ValueError("Inconsistencias na conectividade das ACs:\n- " + "\n- ".join(erros))
+
+    idx_by_id = {ac_id: i for i, ac_id in enumerate(ac_ids)}
     ordem_idx = [idx_by_id[ac_id] for ac_id in ordem_ids]
-    return ac_work.iloc[ordem_idx].reset_index(drop=True)
+    ac_ord = ac_work.iloc[ordem_idx].reset_index(drop=True)
+
+    downstream_unico = {
+        ac_id: (downstream_of[ac_id][0] if downstream_of[ac_id] else None) for ac_id in ac_ids
+    }
+    meta = {
+        "upstream_of": upstream_of,
+        "downstream_of": downstream_unico,
+        "ordem_ids": ordem_ids,
+        "exutorio_id": exutorio_id,
+        "n_ac": len(ac_ids),
+        "todas_contribuem": len(desconectadas) == 0 and len(alcancadas) == len(ac_ids),
+    }
+    return ac_ord, meta
+
+
+def ordenar_ac_topologicamente(ac_df: pd.DataFrame, exutorio_id: int | None = None) -> pd.DataFrame:
+    """
+    Ordena ACs montante→jusante.
+    Se `exutorio_id` for informado, aplica validacao completa da rede convergente.
+    Sem exutorio, ainda rejeita ciclos, auto-referencia, IDs inexistentes/repetidos e bifurcacoes.
+    """
+    ac_work = ac_df.copy()
+    ac_work["ID_AC"] = pd.to_numeric(ac_work["ID_AC"], errors="coerce")
+    if ac_work["ID_AC"].isna().any():
+        raise ValueError("Existem valores nao numericos em `ID_AC`.")
+    ac_work["ID_AC"] = ac_work["ID_AC"].astype(int)
+
+    if exutorio_id is None:
+        # Usa um exutorio candidato: unico no com grau de saida 0, se existir
+        ups_tmp = {}
+        for _, row in ac_work.iterrows():
+            ups_tmp[int(row["ID_AC"])] = parse_upstream_ids(row["ACs_montante_ids"], strict=True)
+        ds_count: dict[int, int] = {i: 0 for i in ups_tmp}
+        for ds, ups in ups_tmp.items():
+            for u in ups:
+                if u in ds_count:
+                    ds_count[u] += 1
+        candidatos = [i for i, c in ds_count.items() if c == 0]
+        if len(candidatos) != 1:
+            raise ValueError(
+                "Informe `exutorio_id` explicitamente. Nao foi possivel inferir um unico exutorio "
+                f"(candidatos sem destino a jusante: {sorted(candidatos)})."
+            )
+        exutorio_id = candidatos[0]
+
+    ac_ord, _meta = validar_e_preparar_rede_ac(ac_work, int(exutorio_id))
+    return ac_ord
+
+
+def fig_rede_conectividade_ac(meta: dict, titulo: str | None = None) -> go.Figure:
+    """Figura interativa Plotly da rede montante→jusante."""
+    upstream_of: dict[int, list[int]] = meta["upstream_of"]
+    exutorio_id = int(meta["exutorio_id"])
+    ordem = list(meta["ordem_ids"])
+
+    # Niveis: distancia topologica desde as fontes
+    nivel: dict[int, int] = {}
+    for ac_id in ordem:
+        ups = upstream_of.get(ac_id, [])
+        nivel[ac_id] = 0 if not ups else 1 + max(nivel[u] for u in ups)
+
+    por_nivel: dict[int, list[int]] = {}
+    for ac_id, nv in nivel.items():
+        por_nivel.setdefault(nv, []).append(ac_id)
+
+    pos: dict[int, tuple[float, float]] = {}
+    for nv, ids_nv in sorted(por_nivel.items()):
+        ids_sorted = sorted(ids_nv)
+        k = len(ids_sorted)
+        for i, ac_id in enumerate(ids_sorted):
+            x = nv
+            y = i - (k - 1) / 2.0
+            pos[ac_id] = (float(x), float(y))
+
+    edge_x: list[float | None] = []
+    edge_y: list[float | None] = []
+    for ds_id, ups in upstream_of.items():
+        for up_id in ups:
+            x0, y0 = pos[up_id]
+            x1, y1 = pos[ds_id]
+            edge_x += [x0, x1, None]
+            edge_y += [y0, y1, None]
+
+    node_x = [pos[i][0] for i in ordem]
+    node_y = [pos[i][1] for i in ordem]
+    cores = ["#d62728" if i == exutorio_id else "#1f77b4" for i in ordem]
+    textos = [
+        f"AC {i}" + (" (exutorio)" if i == exutorio_id else "")
+        + (f"<br>Montantes: {upstream_of[i]}" if upstream_of[i] else "<br>Montantes: —")
+        for i in ordem
+    ]
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=edge_x,
+            y=edge_y,
+            mode="lines",
+            line=dict(width=1.5, color="#7f7f7f"),
+            hoverinfo="none",
+            name="Conexao",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=node_x,
+            y=node_y,
+            mode="markers+text",
+            text=[str(i) for i in ordem],
+            textposition="top center",
+            marker=dict(size=22, color=cores, line=dict(width=1, color="#222")),
+            hovertext=textos,
+            hoverinfo="text",
+            name="AC",
+        )
+    )
+    fig.update_layout(
+        title=titulo
+        or (
+            f"Rede de conectividade das ACs (exutorio={exutorio_id}) — "
+            "transferencia no mesmo passo = aproximacao de reservatorios conectados"
+        ),
+        xaxis=dict(title="Direcao montante → jusante (nivel topologico)", showgrid=False, zeroline=False),
+        yaxis=dict(title="", showgrid=False, zeroline=False, showticklabels=False),
+        showlegend=False,
+        margin=dict(l=40, r=20, t=60, b=40),
+        height=max(320, 60 * max(1, max(len(v) for v in por_nivel.values()))),
+    )
+    return fig
 
 
 def solve_channel_depth(
@@ -855,10 +1141,12 @@ def run_simulation(
         )
     chuva_mmh_eq = chuva_ms * 3600000.0
 
-    ac_df = ordenar_ac_topologicamente(ac_df)
+    ac_df, rede_meta = validar_e_preparar_rede_ac(ac_df, int(exutorio_id))
     n_ac = len(ac_df)
     ac_ids = ac_df["ID_AC"].tolist()
     id_to_idx = {ac_id: i for i, ac_id in enumerate(ac_ids)}
+    upstream_of = rede_meta["upstream_of"]
+    exutorio_id = int(rede_meta["exutorio_id"])
 
     # Validacao explicita de parametros de superficie (sem clamps silenciosos)
     for _, row in ac_df.iterrows():
@@ -910,11 +1198,10 @@ def run_simulation(
         n_eq = float(row["n_eq"])
         decliv = float(row["S_m_m"])
         h0 = h[0, j]
-        upstream_ids = parse_upstream_ids(row["ACs_montante_ids"])
+        ac_id0 = int(row["ID_AC"])
         qin0 = 0.0
-        for up_id in upstream_ids:
-            if up_id in id_to_idx:
-                qin0 += q_out[0, id_to_idx[up_id]]
+        for up_id in upstream_of[ac_id0]:
+            qin0 += q_out[0, id_to_idx[up_id]]
         q_in[0, j] = qin0
         q_out[0, j] = manning_vazao_superficie(h0 * area, area, comp, n_eq, decliv)
         i_excesso[0, j] = 0.0
@@ -946,12 +1233,10 @@ def run_simulation(
             if h_prev < 0.0:
                 raise RuntimeError(f"AC {ac_id}: armazenamento negativo detectado em t={t-1}.")
 
-            # Vazao a montante no mesmo passo (ordem topologica)
-            upstream_ids = parse_upstream_ids(row["ACs_montante_ids"])
+            # Vazao a montante no mesmo passo (ordem topologica; cada montante uma unica vez)
             qin_t = 0.0
-            for up_id in upstream_ids:
-                if up_id in id_to_idx:
-                    qin_t += q_out[t, id_to_idx[up_id]]
+            for up_id in upstream_of[ac_id]:
+                qin_t += q_out[t, id_to_idx[up_id]]
             if qin_t < 0.0:
                 raise RuntimeError(f"AC {ac_id}: Q_in negativo no passo {t}.")
             q_in[t, j] = qin_t
@@ -1010,8 +1295,23 @@ def run_simulation(
             vol_escoado[t, j] = float(sol["v_escoado"])
             residuo_impl[t, j] = float(sol["residuo"])
 
+        # Conservacao de transferencia no passo: soma Q_in = soma Q_out das ACs com destino
+        soma_qin = float(np.sum(q_in[t, :]))
+        soma_qout_transf = 0.0
+        for ac_k in ac_ids:
+            if rede_meta["downstream_of"][ac_k] is not None:
+                soma_qout_transf += float(q_out[t, id_to_idx[ac_k]])
+        if abs(soma_qin - soma_qout_transf) > 1e-9 * max(1.0, abs(soma_qout_transf)):
+            raise RuntimeError(
+                f"Duplicacao/perda de volume transferido no passo {t}: "
+                f"soma(Q_in)={soma_qin:.6g} != soma(Q_out com destino)={soma_qout_transf:.6g}."
+            )
+
     if exutorio_id not in id_to_idx:
-        exutorio_id = ac_ids[-1]
+        raise ValueError(
+            f"Exutorio invalido: AC {exutorio_id} ausente apos ordenacao. "
+            "Nenhum exutorio substituto foi assumido."
+        )
 
     q_ex = q_out[:, id_to_idx[exutorio_id]]
     nivel = solve_channel_depth(q_ex, b_canal, s_canal, n_canal, n_iter=5)
@@ -1363,7 +1663,7 @@ elif pagina == "Instrucoes":
 
 1. **Configuracao** (barra lateral): defina o **intervalo de registro da chuva**, o **passo de integracao** (pode ser menor), a **duracao da chuva**, o **tempo de recessao** (P=0 apos a chuva) e a **unidade** (mm ou mm/h).
 2. **Parametros do canal**: largura, declividade, Manning e nivel de base (cota opcional).
-3. **Areas de contribuicao (AC)**: informe geometria, declividade, montantes (`ACs_montante_ids` com IDs separados por `;`) e lamina inicial `h0_m`.
+3. **Areas de contribuicao (AC)**: informe geometria, declividade, montantes (`ACs_montante_ids` com IDs separados por `;`) e lamina inicial `h0_m`. A rede deve ser **convergente**: cada AC (exceto o exutorio) tem um unico destino a jusante; o grafo interativo ajuda a conferir.
 4. **Unidades de uso do solo (US)**: preencha areas e parametros por classe. Com a opcao automatica ativada, `Infiltracao_eq_mm_h` e `n_eq` sao calculados por media ponderada pela area da AC.
 5. **Chuva**: edite a tabela de registros. O instante `t = 0` e apenas condicao inicial (sem chuva no balanco). Cada valor no **fim** de um intervalo representa a precipitacao ocorrida no intervalo anterior. A intensidade e mantida constante dentro do intervalo de registro, mesmo com passo interno menor.
 6. Clique em **Rodar simulacao** e visualize os hidrogramas de nivel e vazao. Baixe os resultados em Excel se desejar.
@@ -1376,6 +1676,7 @@ elif pagina == "Instrucoes":
 - Simulacoes antigas com coluna `P_mm_h` sao interpretadas como **intensidade em mm/h**.
 - A infiltracao usa balanco volumetrico (lamina + chuva + montante); a agua armazenada pode infiltrar apos o fim da chuva. Opcoes: capacidade constante ou Horton.
 - A propagacao superficial usa Euler implicito volumetrico com Manning em plano inclinado (`V + dt·Q(V) = V_disp`, bissecao); a conversao para nivel no canal usa Manning em secao retangular.
+- A transferencia entre ACs **no mesmo passo interno** e uma **aproximacao numerica de reservatorios conectados** (ordenacao montante→jusante), **nao** uma simulacao hidraulica explicita dos canais de ligacao.
 - Se alterar `Numero de ACs`, recarregue a pagina se necessario para atualizar linhas padrao das US.
         """
     )
@@ -1882,56 +2183,44 @@ else:
     nivel_base = col4.number_input("Nivel base (m)", format="%.3f", key="nivel_base")
 
     st.subheader("2) Areas de contribuicao (AC)")
+    st.caption(
+        "Rede convergente: cada AC (exceto o exutorio) deve ter um unico destino a jusante. "
+        "A transferencia de vazao entre ACs no mesmo passo interno e uma aproximacao de "
+        "reservatorios conectados, nao uma hidraulica explicita dos canais de ligacao."
+    )
     n_ac = st.number_input("Numero de ACs", min_value=1, max_value=20, step=1, key="n_ac")
     exutorio_id = st.number_input("ID da AC de exutorio", min_value=1, max_value=20, step=1, key="exutorio_id")
 
-    default_ac = pd.DataFrame(
-        [
+    # Padrao convergente: ACs 1..n-1 → exutorio n (sem bifurcacao da mesma vazao)
+    exut_padrao = int(n_ac)
+    rows_ac_default = []
+    for idx in range(1, int(n_ac) + 1):
+        if idx == 1:
+            area, L, S, infil, n_eq = 85000.0, 350.0, 0.015, 12.0, 0.12
+        elif idx == 2:
+            area, L, S, infil, n_eq = 92000.0, 420.0, 0.012, 10.0, 0.10
+        elif idx == 3:
+            area, L, S, infil, n_eq = 130000.0, 500.0, 0.010, 8.0, 0.09
+        else:
+            area, L, S, infil, n_eq = 100000.0, 400.0, 0.01, 10.0, 0.1
+        if idx == exut_padrao:
+            montantes = ";".join(str(i) for i in range(1, exut_padrao)) if exut_padrao > 1 else "0"
+        else:
+            montantes = "0"
+        rows_ac_default.append(
             {
-                "ID_AC": 1,
-                "Area_m2": 85000.0,
-                "L_m": 350.0,
-                "S_m_m": 0.015,
-                "ACs_montante_ids": "0",
-                "h0_m": 0.0,
-                "Infiltracao_eq_mm_h": 12.0,
-                "n_eq": 0.12,
-            },
-            {
-                "ID_AC": 2,
-                "Area_m2": 92000.0,
-                "L_m": 420.0,
-                "S_m_m": 0.012,
-                "ACs_montante_ids": "1",
-                "h0_m": 0.0,
-                "Infiltracao_eq_mm_h": 10.0,
-                "n_eq": 0.10,
-            },
-            {
-                "ID_AC": 3,
-                "Area_m2": 130000.0,
-                "L_m": 500.0,
-                "S_m_m": 0.010,
-                "ACs_montante_ids": "1;2",
-                "h0_m": 0.0,
-                "Infiltracao_eq_mm_h": 8.0,
-                "n_eq": 0.09,
-            },
-        ]
-    )
-    if n_ac > len(default_ac):
-        for idx in range(len(default_ac) + 1, n_ac + 1):
-            default_ac.loc[len(default_ac)] = {
                 "ID_AC": idx,
-                "Area_m2": 100000.0,
-                "L_m": 400.0,
-                "S_m_m": 0.01,
-                "ACs_montante_ids": "0",
+                "Area_m2": area,
+                "L_m": L,
+                "S_m_m": S,
+                "ACs_montante_ids": montantes,
                 "h0_m": 0.0,
-                "Infiltracao_eq_mm_h": 10.0,
-                "n_eq": 0.1,
+                "Infiltracao_eq_mm_h": infil,
+                "n_eq": n_eq,
             }
-    ac_df_edit = default_ac.head(n_ac).copy()
+        )
+    default_ac = pd.DataFrame(rows_ac_default)
+    ac_df_edit = default_ac.copy()
     ac_loaded = st.session_state.get("ac_df_loaded")
     if isinstance(ac_loaded, pd.DataFrame) and not ac_loaded.empty:
         ac_df_edit = ac_loaded.copy().head(n_ac)
@@ -1943,6 +2232,16 @@ else:
         hide_index=True,
         key="editor_ac",
     )
+
+    try:
+        _ac_ord_ui, rede_ui = validar_e_preparar_rede_ac(ac_df, int(exutorio_id))
+        st.success(
+            f"Rede valida: {rede_ui['n_ac']} ACs contribuem ao exutorio {rede_ui['exutorio_id']} "
+            f"sem bifurcacao de vazao (ordenacao montante→jusante: {rede_ui['ordem_ids']})."
+        )
+        st.plotly_chart(fig_rede_conectividade_ac(rede_ui), use_container_width=True)
+    except Exception as exc_rede:
+        st.error(str(exc_rede))
 
     st.subheader("3) Unidades de uso do solo (US) - editavel")
     usar_us_para_eq = st.checkbox(
