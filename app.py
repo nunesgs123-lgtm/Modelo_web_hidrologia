@@ -46,6 +46,21 @@ GLOSSARIO_ROWS = [
     {"Termo": "Volume_infiltrado_acum_m3", "Unidade": "m3", "Descricao": "Volume infiltrado acumulado desde t=0."},
     {"Termo": "Volume_escoado_m3", "Unidade": "m3", "Descricao": "Volume escoado no passo = V_disponivel - V_novo (= Q_out * dt)."},
     {"Termo": "Residuo_implicito_m3", "Unidade": "m3", "Descricao": "Residuo de V_novo + dt*Q_Manning(V_novo) - V_disponivel apos o solver."},
+    {
+        "Termo": "Erro_AC_m3",
+        "Unidade": "m3",
+        "Descricao": "Resíduo do balanço por AC: V_ini+V_prec+V_mont-V_inf-V_saida-V_fin. Fechamento numerico ≠ validacao fisica.",
+    },
+    {
+        "Termo": "Erro_bacia_m3",
+        "Unidade": "m3",
+        "Descricao": "Resíduo global: V_ini+V_prec-V_inf-V_exutorio-V_fin (transferencias internas excluidas).",
+    },
+    {
+        "Termo": "Tol_balanco_m3",
+        "Unidade": "m3",
+        "Descricao": "Tolerancia configuravel de fechamento numerico do balanco hidrico (padrao 1e-6 m3).",
+    },
     {"Termo": "Q_in_m3_s", "Unidade": "m3/s", "Descricao": "Vazao recebida das AC(s) a montante imediata."},
     {"Termo": "Q_out_m3_s", "Unidade": "m3/s", "Descricao": "Vazao de saida da AC (propagacao por Manning)."},
     {"Termo": "Q_ex_m3_s", "Unidade": "m3/s", "Descricao": "Vazao no exutorio selecionado."},
@@ -63,6 +78,8 @@ GLOSSARIO_ROWS = [
 PASSOS_INTEGRACAO_PERMITIDOS = [600, 300, 120, 60, 30, 10, 5]
 UNIDADE_CHUVA_INTENSIDADE = "mm/h"
 UNIDADE_CHUVA_ACUMULADA = "mm"
+# Tolerancia de fechamento NUMERICO do balanco hidrico (nao e validacao fisica).
+TOL_BALANCO_HIDRICO_M3_DEFAULT = 1e-6
 
 # Referencias para calibracao (ordens de grandeza; ajustar ao local e ao evento)
 CALIBRACAO_USO_SOLO = [
@@ -1358,6 +1375,375 @@ def run_simulation(
     return df_saida, df_ac_detalhe
 
 
+def diagnosticar_balanco_hidrico(
+    df_saida: pd.DataFrame,
+    df_ac_detalhe: pd.DataFrame,
+    ac_df: pd.DataFrame,
+    exutorio_id: int,
+    dt: float,
+    tempo_chuva_s: float,
+    tol_fechamento_m3: float = TOL_BALANCO_HIDRICO_M3_DEFAULT,
+) -> dict:
+    """
+    Diagnostico do balanco hidrico por AC/passo e para a bacia.
+
+    Erro_AC = V_ini + V_prec + V_mont - V_inf - V_saida - V_fin
+    Erro_bacia = V_ini + V_prec - V_inf - V_exutorio - V_fin
+    (transferencias internas entre ACs nao entram no balanco global.)
+
+    A tolerancia de fechamento e apenas criterio NUMERICO; nao valida a fisica do modelo.
+    """
+    if df_saida is None or df_ac_detalhe is None or ac_df is None:
+        raise ValueError("Resultados de simulacao incompletos para o balanco hidrico.")
+    dt = float(dt)
+    if dt <= 0:
+        raise ValueError("`dt` deve ser > 0 para o balanco hidrico.")
+    tol = float(tol_fechamento_m3)
+    if not np.isfinite(tol) or tol < 0:
+        raise ValueError("`tol_fechamento_m3` deve ser finita e >= 0.")
+
+    ac_work = ac_df.copy()
+    ac_work["ID_AC"] = pd.to_numeric(ac_work["ID_AC"], errors="coerce").astype(int)
+    ac_work["Area_m2"] = pd.to_numeric(ac_work["Area_m2"], errors="coerce").astype(float)
+    area_by_id = {int(r["ID_AC"]): float(r["Area_m2"]) for _, r in ac_work.iterrows()}
+    area_total = float(sum(area_by_id.values()))
+    if area_total <= 0:
+        raise ValueError("Area total da bacia deve ser > 0.")
+
+    df_s = df_saida.copy()
+    df_s["Passo"] = pd.to_numeric(df_s["Passo"], errors="coerce").astype(int)
+    df_s["Tempo_s"] = pd.to_numeric(df_s["Tempo_s"], errors="coerce").astype(float)
+    df_s["P_m_s"] = pd.to_numeric(df_s["P_m_s"], errors="coerce").astype(float)
+    df_s["Q_ex_m3_s"] = pd.to_numeric(df_s["Q_ex_m3_s"], errors="coerce").astype(float)
+    p_by_passo = df_s.set_index("Passo")["P_m_s"].to_dict()
+    qex_by_passo = df_s.set_index("Passo")["Q_ex_m3_s"].to_dict()
+    tempo_by_passo = df_s.set_index("Passo")["Tempo_s"].to_dict()
+
+    df_ac = df_ac_detalhe.copy()
+    df_ac["Passo"] = pd.to_numeric(df_ac["Passo"], errors="coerce").astype(int)
+    df_ac["ID_AC"] = pd.to_numeric(df_ac["ID_AC"], errors="coerce").astype(int)
+    df_ac["h_m"] = pd.to_numeric(df_ac["h_m"], errors="coerce").astype(float)
+    df_ac["Q_in_m3_s"] = pd.to_numeric(df_ac["Q_in_m3_s"], errors="coerce").astype(float)
+    df_ac["Q_out_m3_s"] = pd.to_numeric(df_ac["Q_out_m3_s"], errors="coerce").astype(float)
+    if "Volume_infiltrado_m3" in df_ac.columns:
+        df_ac["Volume_infiltrado_m3"] = pd.to_numeric(df_ac["Volume_infiltrado_m3"], errors="coerce").astype(float)
+    else:
+        df_ac["Volume_infiltrado_m3"] = 0.0
+    if "Volume_escoado_m3" in df_ac.columns:
+        df_ac["Volume_escoado_m3"] = pd.to_numeric(df_ac["Volume_escoado_m3"], errors="coerce").astype(float)
+    else:
+        df_ac["Volume_escoado_m3"] = df_ac["Q_out_m3_s"] * dt
+
+    h_lookup = {(int(r["ID_AC"]), int(r["Passo"])): float(r["h_m"]) for _, r in df_ac.iterrows()}
+    passos = sorted(df_ac["Passo"].unique())
+    tempo_chuva_s = max(float(tempo_chuva_s), 0.0)
+
+    rows_passo = []
+    for _, row in df_ac.iterrows():
+        passo = int(row["Passo"])
+        ac_id = int(row["ID_AC"])
+        area = area_by_id.get(ac_id)
+        if area is None:
+            raise ValueError(f"AC {ac_id} presente nos resultados mas ausente em ac_df.")
+        tempo_s = float(tempo_by_passo.get(passo, row.get("Tempo_s", passo * dt)))
+        periodo = "chuva" if tempo_s <= tempo_chuva_s + 1e-9 else "recessao"
+        if passo == 0:
+            v_ini = area * float(row["h_m"])
+            rows_passo.append(
+                {
+                    "Passo": passo,
+                    "Tempo_s": tempo_s,
+                    "Periodo": "inicial",
+                    "ID_AC": ac_id,
+                    "Area_m2": area,
+                    "V_inicial_m3": v_ini,
+                    "V_precipitacao_m3": 0.0,
+                    "V_montante_m3": 0.0,
+                    "V_infiltracao_m3": 0.0,
+                    "V_saida_m3": 0.0,
+                    "V_final_m3": v_ini,
+                    "Erro_AC_m3": 0.0,
+                    "Fecha_tol": True,
+                }
+            )
+            continue
+
+        h_prev = h_lookup.get((ac_id, passo - 1))
+        if h_prev is None:
+            raise ValueError(f"Falta h no passo {passo - 1} para AC {ac_id}.")
+        v_ini = area * h_prev
+        v_fin = area * float(row["h_m"])
+        p_ms = float(p_by_passo.get(passo, 0.0))
+        v_prec = max(p_ms, 0.0) * area * dt
+        v_mont = max(float(row["Q_in_m3_s"]), 0.0) * dt
+        v_inf = max(float(row["Volume_infiltrado_m3"]), 0.0)
+        v_sai = max(float(row["Volume_escoado_m3"]), 0.0)
+        erro = v_ini + v_prec + v_mont - v_inf - v_sai - v_fin
+        rows_passo.append(
+            {
+                "Passo": passo,
+                "Tempo_s": tempo_s,
+                "Periodo": periodo,
+                "ID_AC": ac_id,
+                "Area_m2": area,
+                "V_inicial_m3": v_ini,
+                "V_precipitacao_m3": v_prec,
+                "V_montante_m3": v_mont,
+                "V_infiltracao_m3": v_inf,
+                "V_saida_m3": v_sai,
+                "V_final_m3": v_fin,
+                "Erro_AC_m3": erro,
+                "Fecha_tol": abs(erro) <= tol,
+            }
+        )
+
+    df_passos = pd.DataFrame(rows_passo)
+
+    def _resumo_ac(df_src: pd.DataFrame, label: str) -> pd.DataFrame:
+        regs = []
+        ativos = df_src[df_src["Passo"] > 0]
+        for ac_id, area in area_by_id.items():
+            sub = ativos[ativos["ID_AC"] == ac_id]
+            # V_inicial do periodo = armazenamento no inicio do primeiro passo ativo do recorte
+            if sub.empty:
+                v0 = area * h_lookup.get((ac_id, 0), 0.0)
+                vf = v0
+                v_prec = v_mont = v_inf = v_sai = 0.0
+                erro_sum = 0.0
+            else:
+                p0 = int(sub["Passo"].min())
+                p1 = int(sub["Passo"].max())
+                v0 = area * h_lookup.get((ac_id, p0 - 1), h_lookup.get((ac_id, 0), 0.0))
+                vf = area * h_lookup.get((ac_id, p1), 0.0)
+                v_prec = float(sub["V_precipitacao_m3"].sum())
+                v_mont = float(sub["V_montante_m3"].sum())
+                v_inf = float(sub["V_infiltracao_m3"].sum())
+                v_sai = float(sub["V_saida_m3"].sum())
+                erro_sum = float(sub["Erro_AC_m3"].sum())
+            erro_periodo = v0 + v_prec + v_mont - v_inf - v_sai - vf
+            regs.append(
+                {
+                    "Periodo": label,
+                    "ID_AC": ac_id,
+                    "Area_m2": area,
+                    "V_inicial_m3": v0,
+                    "V_precipitacao_m3": v_prec,
+                    "V_montante_m3": v_mont,
+                    "V_infiltracao_m3": v_inf,
+                    "V_saida_m3": v_sai,
+                    "V_final_m3": vf,
+                    "Erro_AC_m3": erro_periodo,
+                    "Erro_AC_soma_passos_m3": erro_sum,
+                    "Fecha_tol": abs(erro_periodo) <= tol,
+                }
+            )
+        return pd.DataFrame(regs)
+
+    def _balanco_bacia(df_src: pd.DataFrame, label: str) -> dict:
+        ativos = df_src[df_src["Passo"] > 0]
+        if ativos.empty:
+            v_ini = float(
+                sum(area_by_id[a] * h_lookup.get((a, 0), 0.0) for a in area_by_id)
+            )
+            return {
+                "Periodo": label,
+                "V_inicial_m3": v_ini,
+                "V_precipitacao_m3": 0.0,
+                "V_infiltracao_m3": 0.0,
+                "V_exutorio_m3": 0.0,
+                "V_final_m3": v_ini,
+                "Erro_bacia_m3": 0.0,
+                "Erro_abs_m3": 0.0,
+                "Erro_rel_pct": 0.0,
+                "Coef_escoamento": float("nan"),
+                "Pct_infiltrado": float("nan"),
+                "Pct_armazenado": float("nan"),
+                "Lamina_escoamento_mm": 0.0,
+                "Lamina_infiltrada_mm": 0.0,
+                "Volume_acum_exutorio_m3": 0.0,
+                "Fecha_tol": True,
+                "Tol_m3": tol,
+            }
+
+        p0 = int(ativos["Passo"].min())
+        p1 = int(ativos["Passo"].max())
+        v_ini = float(sum(area_by_id[a] * h_lookup.get((a, p0 - 1), 0.0) for a in area_by_id))
+        v_fin = float(sum(area_by_id[a] * h_lookup.get((a, p1), 0.0) for a in area_by_id))
+        # Precipitacao e infiltracao: somar por AC (sem contar montante)
+        v_prec = float(ativos["V_precipitacao_m3"].sum())
+        v_inf = float(ativos["V_infiltracao_m3"].sum())
+        # Volume no exutorio: integrar Q_ex nos passos do periodo (sem transferencias internas)
+        passos_periodo = sorted(ativos["Passo"].unique())
+        v_ex = float(sum(max(qex_by_passo.get(p, 0.0), 0.0) * dt for p in passos_periodo))
+        erro = v_ini + v_prec - v_inf - v_ex - v_fin
+        escala = max(abs(v_prec), abs(v_ini), abs(v_fin), abs(v_ex), abs(v_inf), 1.0)
+        erro_rel = 100.0 * erro / escala
+        coef = (v_ex / v_prec) if abs(v_prec) > 1e-15 else float("nan")
+        pct_inf = (100.0 * v_inf / v_prec) if abs(v_prec) > 1e-15 else float("nan")
+        pct_arm = (100.0 * (v_fin - v_ini) / v_prec) if abs(v_prec) > 1e-15 else float("nan")
+        return {
+            "Periodo": label,
+            "V_inicial_m3": v_ini,
+            "V_precipitacao_m3": v_prec,
+            "V_infiltracao_m3": v_inf,
+            "V_exutorio_m3": v_ex,
+            "V_final_m3": v_fin,
+            "Erro_bacia_m3": erro,
+            "Erro_abs_m3": abs(erro),
+            "Erro_rel_pct": erro_rel,
+            "Coef_escoamento": coef,
+            "Pct_infiltrado": pct_inf,
+            "Pct_armazenado": pct_arm,
+            "Lamina_escoamento_mm": 1000.0 * v_ex / area_total,
+            "Lamina_infiltrada_mm": 1000.0 * v_inf / area_total,
+            "Volume_acum_exutorio_m3": v_ex,
+            "Fecha_tol": abs(erro) <= tol,
+            "Tol_m3": tol,
+        }
+
+    # Periodos: so chuva (Tempo_s <= tempo_chuva) e horizonte completo (chuva+recessao)
+    df_chuva = df_passos[df_passos["Periodo"].isin(["inicial", "chuva"])].copy()
+    # Inclui passo 0 sempre; passos de chuva; exclui recessao
+    df_chuva = df_passos[(df_passos["Passo"] == 0) | (df_passos["Periodo"] == "chuva")].copy()
+    df_completo = df_passos.copy()
+
+    resumo_ac_chuva = _resumo_ac(df_chuva, "evento_chuva")
+    resumo_ac_completo = _resumo_ac(df_completo, "chuva_mais_recessao")
+    df_resumo_ac = pd.concat([resumo_ac_chuva, resumo_ac_completo], ignore_index=True)
+
+    bacia_chuva = _balanco_bacia(df_chuva, "evento_chuva")
+    bacia_completo = _balanco_bacia(df_completo, "chuva_mais_recessao")
+    df_bacia = pd.DataFrame([bacia_chuva, bacia_completo])
+
+    # Series acumuladas (horizonte completo) para graficos
+    ativos_full = df_passos[df_passos["Passo"] > 0].copy()
+    if ativos_full.empty:
+        df_acum = pd.DataFrame(
+            columns=[
+                "Passo",
+                "Tempo_s",
+                "V_prec_acum_m3",
+                "V_inf_acum_m3",
+                "V_exutorio_acum_m3",
+                "V_arm_bacia_m3",
+            ]
+        )
+    else:
+        # Agregar por passo
+        prec_passo = ativos_full.groupby("Passo", as_index=False)["V_precipitacao_m3"].sum()
+        inf_passo = ativos_full.groupby("Passo", as_index=False)["V_infiltracao_m3"].sum()
+        prec_passo = prec_passo.merge(inf_passo, on="Passo", how="outer").fillna(0.0)
+        prec_passo["Tempo_s"] = prec_passo["Passo"].map(tempo_by_passo)
+        prec_passo = prec_passo.sort_values("Passo")
+        prec_passo["V_prec_acum_m3"] = prec_passo["V_precipitacao_m3"].cumsum()
+        prec_passo["V_inf_acum_m3"] = prec_passo["V_infiltracao_m3"].cumsum()
+        prec_passo["V_exutorio_acum_m3"] = [
+            sum(max(qex_by_passo.get(p, 0.0), 0.0) * dt for p in prec_passo["Passo"] if p <= passo)
+            for passo in prec_passo["Passo"]
+        ]
+        arm = []
+        for passo in prec_passo["Passo"]:
+            arm.append(float(sum(area_by_id[a] * h_lookup.get((a, int(passo)), 0.0) for a in area_by_id)))
+        prec_passo["V_arm_bacia_m3"] = arm
+        df_acum = prec_passo[
+            [
+                "Passo",
+                "Tempo_s",
+                "V_prec_acum_m3",
+                "V_inf_acum_m3",
+                "V_exutorio_acum_m3",
+                "V_arm_bacia_m3",
+            ]
+        ].copy()
+
+    # Distribuicao percentual (completo e chuva) sobre precipitacao
+    dist_rows = []
+    for b in (bacia_chuva, bacia_completo):
+        vp = b["V_precipitacao_m3"]
+        base = abs(vp) if abs(vp) > 1e-15 else float("nan")
+        dist_rows.append(
+            {
+                "Periodo": b["Periodo"],
+                "Componente": "Infiltracao",
+                "Volume_m3": b["V_infiltracao_m3"],
+                "Percentual": 100.0 * b["V_infiltracao_m3"] / base if np.isfinite(base) else float("nan"),
+            }
+        )
+        dist_rows.append(
+            {
+                "Periodo": b["Periodo"],
+                "Componente": "Exutorio",
+                "Volume_m3": b["V_exutorio_m3"],
+                "Percentual": 100.0 * b["V_exutorio_m3"] / base if np.isfinite(base) else float("nan"),
+            }
+        )
+        darm = b["V_final_m3"] - b["V_inicial_m3"]
+        dist_rows.append(
+            {
+                "Periodo": b["Periodo"],
+                "Componente": "Variacao_armazenamento",
+                "Volume_m3": darm,
+                "Percentual": 100.0 * darm / base if np.isfinite(base) else float("nan"),
+            }
+        )
+        dist_rows.append(
+            {
+                "Periodo": b["Periodo"],
+                "Componente": "Residuo_numerico",
+                "Volume_m3": b["Erro_bacia_m3"],
+                "Percentual": 100.0 * b["Erro_bacia_m3"] / base if np.isfinite(base) else float("nan"),
+            }
+        )
+    df_distribuicao = pd.DataFrame(dist_rows)
+
+    return {
+        "df_passos": df_passos,
+        "df_resumo_ac": df_resumo_ac,
+        "df_bacia": df_bacia,
+        "df_acumulados": df_acum,
+        "df_distribuicao": df_distribuicao,
+        "tol_m3": tol,
+        "area_total_m2": area_total,
+        "exutorio_id": int(exutorio_id),
+        "tempo_chuva_s": tempo_chuva_s,
+        "fecha_ok": bool(df_bacia["Fecha_tol"].all() and df_passos["Fecha_tol"].all()),
+    }
+
+
+def montar_excel_resultados(
+    df_saida: pd.DataFrame,
+    df_ac_detalhe: pd.DataFrame,
+    balanco: dict | None = None,
+) -> bytes:
+    """Empacota saidas da simulacao e do diagnostico de balanco em Excel."""
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df_saida.to_excel(writer, index=False, sheet_name="Exutorio")
+        df_ac_detalhe.to_excel(writer, index=False, sheet_name="Detalhe_AC")
+        if balanco is not None:
+            balanco["df_passos"].to_excel(writer, index=False, sheet_name="Balanco_passos")
+            balanco["df_resumo_ac"].to_excel(writer, index=False, sheet_name="Balanco_AC")
+            balanco["df_bacia"].to_excel(writer, index=False, sheet_name="Balanco_bacia")
+            balanco["df_acumulados"].to_excel(writer, index=False, sheet_name="Balanco_acumulados")
+            balanco["df_distribuicao"].to_excel(writer, index=False, sheet_name="Balanco_distribuicao")
+            pd.DataFrame(
+                [
+                    {
+                        "Tol_fechamento_m3": balanco["tol_m3"],
+                        "Nota": (
+                            "Tolerancia de fechamento NUMERICO do balanco hidrico. "
+                            "Nao constitui validacao fisica do modelo."
+                        ),
+                        "Fecha_ok": balanco["fecha_ok"],
+                        "Area_total_m2": balanco["area_total_m2"],
+                        "Exutorio_id": balanco["exutorio_id"],
+                        "Tempo_chuva_s": balanco["tempo_chuva_s"],
+                    }
+                ]
+            ).to_excel(writer, index=False, sheet_name="Balanco_meta")
+    return output.getvalue()
+
+
 def calcular_parametros_equivalentes_por_us(ac_df: pd.DataFrame, us_df: pd.DataFrame) -> pd.DataFrame:
     ac_out = ac_df.copy()
     us_work = us_df.copy()
@@ -1589,6 +1975,7 @@ with st.sidebar:
         [
             "Simulacao",
             "Simulacoes salvas",
+            "Balanco Hidrico",
             "Validacao",
             "Sugestao de calibracao",
             "Instrucoes",
@@ -1598,7 +1985,162 @@ with st.sidebar:
         key="pagina_menu",
     )
 
-if pagina == "Sugestao de calibracao":
+if pagina == "Balanco Hidrico":
+    st.title("Balanco Hidrico")
+    st.caption(
+        "Diagnostico de **fechamento numerico** de massa. "
+        "Nao confunda com validacao fisica do modelo (ver aba Validacao)."
+    )
+    st.session_state.setdefault("tol_balanco_m3", float(TOL_BALANCO_HIDRICO_M3_DEFAULT))
+    tol_ui = st.number_input(
+        "Tolerancia de fechamento numerico (m3)",
+        min_value=0.0,
+        format="%.6e",
+        key="tol_balanco_m3",
+        help="Criterio numerico |Erro| <= tol. Padrao 1e-6 m3. Nao e validacao fisica.",
+    )
+
+    df_s = st.session_state.get("df_saida_validacao")
+    df_ac = st.session_state.get("df_ac_detalhe")
+    ac_ref = st.session_state.get("ac_df_loaded")
+    meta_sim = st.session_state.get("sim_meta_balanco")
+    if df_s is None or df_ac is None or ac_ref is None or meta_sim is None:
+        st.warning(
+            "Nenhuma simulacao disponivel. Va em **Simulacao**, rode o modelo e volte a esta aba."
+        )
+    else:
+        try:
+            bal = diagnosticar_balanco_hidrico(
+                df_saida=df_s,
+                df_ac_detalhe=df_ac,
+                ac_df=ac_ref,
+                exutorio_id=int(meta_sim["exutorio_id"]),
+                dt=float(meta_sim["dt"]),
+                tempo_chuva_s=float(meta_sim["tempo_chuva_s"]),
+                tol_fechamento_m3=float(tol_ui),
+            )
+            st.session_state["balanco_hidrico"] = bal
+            df_bacia = bal["df_bacia"]
+            row_ev = df_bacia[df_bacia["Periodo"] == "evento_chuva"].iloc[0]
+            row_full = df_bacia[df_bacia["Periodo"] == "chuva_mais_recessao"].iloc[0]
+
+            st.info(
+                f"Tolerancia configurada: **{tol_ui:.3e} m³**. "
+                f"Fechamento numerico global: "
+                f"{'OK' if bal['fecha_ok'] else 'FORA DA TOLERANCIA'}."
+            )
+
+            st.subheader("Indicadores — evento de chuva")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Erro abs. (m3)", f"{row_ev['Erro_abs_m3']:.4e}")
+            c2.metric("Erro rel. (%)", f"{row_ev['Erro_rel_pct']:.4e}")
+            c3.metric("Coef. escoamento", f"{row_ev['Coef_escoamento']:.4f}" if np.isfinite(row_ev["Coef_escoamento"]) else "—")
+            c4.metric("Vol. exutorio (m3)", f"{row_ev['Volume_acum_exutorio_m3']:.4f}")
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("% infiltrado", f"{row_ev['Pct_infiltrado']:.2f}" if np.isfinite(row_ev["Pct_infiltrado"]) else "—")
+            d2.metric("% armazenado", f"{row_ev['Pct_armazenado']:.2f}" if np.isfinite(row_ev["Pct_armazenado"]) else "—")
+            d3.metric("Lamina escoamento (mm)", f"{row_ev['Lamina_escoamento_mm']:.3f}")
+            d4.metric("Lamina infiltrada (mm)", f"{row_ev['Lamina_infiltrada_mm']:.3f}")
+
+            st.subheader("Indicadores — chuva + recessao")
+            e1, e2, e3, e4 = st.columns(4)
+            e1.metric("Erro abs. (m3)", f"{row_full['Erro_abs_m3']:.4e}")
+            e2.metric("Erro rel. (%)", f"{row_full['Erro_rel_pct']:.4e}")
+            e3.metric("Coef. escoamento", f"{row_full['Coef_escoamento']:.4f}" if np.isfinite(row_full["Coef_escoamento"]) else "—")
+            e4.metric("Vol. exutorio (m3)", f"{row_full['Volume_acum_exutorio_m3']:.4f}")
+            f1, f2, f3, f4 = st.columns(4)
+            f1.metric("% infiltrado", f"{row_full['Pct_infiltrado']:.2f}" if np.isfinite(row_full["Pct_infiltrado"]) else "—")
+            f2.metric("% armazenado", f"{row_full['Pct_armazenado']:.2f}" if np.isfinite(row_full["Pct_armazenado"]) else "—")
+            f3.metric("Lamina escoamento (mm)", f"{row_full['Lamina_escoamento_mm']:.3f}")
+            f4.metric("Lamina infiltrada (mm)", f"{row_full['Lamina_infiltrada_mm']:.3f}")
+
+            st.subheader("Volumes acumulados (bacia)")
+            df_acum = bal["df_acumulados"]
+            if not df_acum.empty:
+                fig_acum = go.Figure()
+                fig_acum.add_trace(
+                    go.Scatter(
+                        x=df_acum["Tempo_s"],
+                        y=df_acum["V_prec_acum_m3"],
+                        name="Precipitacao acum.",
+                        mode="lines",
+                    )
+                )
+                fig_acum.add_trace(
+                    go.Scatter(
+                        x=df_acum["Tempo_s"],
+                        y=df_acum["V_inf_acum_m3"],
+                        name="Infiltracao acum.",
+                        mode="lines",
+                    )
+                )
+                fig_acum.add_trace(
+                    go.Scatter(
+                        x=df_acum["Tempo_s"],
+                        y=df_acum["V_exutorio_acum_m3"],
+                        name="Exutorio acum.",
+                        mode="lines",
+                    )
+                )
+                fig_acum.add_trace(
+                    go.Scatter(
+                        x=df_acum["Tempo_s"],
+                        y=df_acum["V_arm_bacia_m3"],
+                        name="Armazenamento bacia",
+                        mode="lines",
+                    )
+                )
+                if float(meta_sim["tempo_chuva_s"]) > 0:
+                    fig_acum.add_vline(
+                        x=float(meta_sim["tempo_chuva_s"]),
+                        line_dash="dash",
+                        line_color="#888",
+                        annotation_text="Fim da chuva",
+                    )
+                fig_acum.update_layout(
+                    xaxis_title="Tempo (s)",
+                    yaxis_title="Volume (m3)",
+                    legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
+                )
+                st.plotly_chart(fig_acum, use_container_width=True)
+
+            st.subheader("Distribuicao percentual dos componentes")
+            fig_dist = px.bar(
+                bal["df_distribuicao"],
+                x="Componente",
+                y="Percentual",
+                color="Periodo",
+                barmode="group",
+                title="Percentuais em relacao a precipitacao do periodo",
+            )
+            st.plotly_chart(fig_dist, use_container_width=True)
+
+            st.subheader("Balanco da bacia")
+            st.dataframe(bal["df_bacia"], use_container_width=True, hide_index=True)
+
+            st.subheader("Resumo por AC")
+            st.dataframe(bal["df_resumo_ac"], use_container_width=True, hide_index=True)
+
+            st.subheader("Tabelas individuais por AC (passos)")
+            ids_ac = sorted(bal["df_passos"]["ID_AC"].unique())
+            ac_sel = st.selectbox("Selecionar AC", options=ids_ac, key="balanco_ac_sel")
+            st.dataframe(
+                bal["df_passos"][bal["df_passos"]["ID_AC"] == ac_sel].reset_index(drop=True),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            st.download_button(
+                "Baixar Excel (simulacao + balanco)",
+                data=montar_excel_resultados(df_s, df_ac, bal),
+                file_name="resultado_balanco_hidrico.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_balanco_excel",
+            )
+        except Exception as exc_bal:
+            st.error(f"Erro no diagnostico de balanco: {exc_bal}")
+
+elif pagina == "Sugestao de calibracao":
     st.title("Sugestao de calibracao")
     st.caption(
         "Valores de referencia para **infiltracao (mm/h)** e **Manning (n)** na superficie (US) e **n do canal**. "
@@ -1667,8 +2209,9 @@ elif pagina == "Instrucoes":
 4. **Unidades de uso do solo (US)**: preencha areas e parametros por classe. Com a opcao automatica ativada, `Infiltracao_eq_mm_h` e `n_eq` sao calculados por media ponderada pela area da AC.
 5. **Chuva**: edite a tabela de registros. O instante `t = 0` e apenas condicao inicial (sem chuva no balanco). Cada valor no **fim** de um intervalo representa a precipitacao ocorrida no intervalo anterior. A intensidade e mantida constante dentro do intervalo de registro, mesmo com passo interno menor.
 6. Clique em **Rodar simulacao** e visualize os hidrogramas de nivel e vazao. Baixe os resultados em Excel se desejar.
-7. Aba **Validacao**: informe niveis medidos em campo (grade ou CSV) e compare com a serie simulada (NSE, R2, RMSE, etc.).
-8. Aba **Sugestao de calibracao**: consulte faixas de infiltracao, n na superficie e n do canal antes de preencher a simulacao.
+7. Aba **Balanco Hidrico**: diagnostico de fechamento numerico de massa (por AC e bacia; chuva vs recessao). Tolerancia configuravel; nao substitui a validacao fisica.
+8. Aba **Validacao**: informe niveis medidos em campo (grade ou CSV) e compare com a serie simulada (NSE, R2, RMSE, etc.).
+9. Aba **Sugestao de calibracao**: consulte faixas de infiltracao, n na superficie e n do canal antes de preencher a simulacao.
 
 ### Observacoes
 
@@ -2478,13 +3021,22 @@ else:
                 horton_f0_multiplicador=float(horton_f0_multiplicador),
             )
 
+            tempo_chuva_s_run = max(len(chuva_regs) - 1, 0) * float(intervalo_registro_s)
             st.session_state["df_saida_validacao"] = df_saida.copy()
+            st.session_state["df_ac_detalhe"] = df_ac_detalhe.copy()
             st.session_state["df_validacao_obs"] = montar_df_validacao(
                 df_saida, st.session_state.get("df_validacao_obs")
             )
             st.session_state["ac_df_loaded"] = ac_df.copy()
             st.session_state["us_df_loaded"] = us_df.copy()
             st.session_state["chuva_df_loaded"] = chuva_df_edit.copy()
+            st.session_state["sim_meta_balanco"] = {
+                "dt": float(dt_integracao_s),
+                "tempo_chuva_s": float(tempo_chuva_s_run),
+                "tempo_recessao_s": float(tempo_recessao_min) * 60.0,
+                "exutorio_id": int(exutorio_id),
+                "intervalo_registro_s": float(intervalo_registro_s),
+            }
 
             st.success("Simulacao concluida.")
             met_run = metricas_precipitacao(
@@ -2523,13 +3075,20 @@ else:
             st.subheader("Saida detalhada por AC")
             st.dataframe(df_ac_detalhe, use_container_width=True, hide_index=True)
 
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                df_saida.to_excel(writer, index=False, sheet_name="Exutorio")
-                df_ac_detalhe.to_excel(writer, index=False, sheet_name="Detalhe_AC")
+            tol_xlsx = float(st.session_state.get("tol_balanco_m3", TOL_BALANCO_HIDRICO_M3_DEFAULT))
+            bal_xlsx = diagnosticar_balanco_hidrico(
+                df_saida=df_saida,
+                df_ac_detalhe=df_ac_detalhe,
+                ac_df=ac_df,
+                exutorio_id=int(exutorio_id),
+                dt=float(dt_integracao_s),
+                tempo_chuva_s=float(tempo_chuva_s_run),
+                tol_fechamento_m3=tol_xlsx,
+            )
+            st.session_state["balanco_hidrico"] = bal_xlsx
             st.download_button(
                 "Baixar resultados em Excel",
-                data=output.getvalue(),
+                data=montar_excel_resultados(df_saida, df_ac_detalhe, bal_xlsx),
                 file_name="resultado_modelo_hidrologico.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )

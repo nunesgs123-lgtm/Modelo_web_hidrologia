@@ -5,6 +5,15 @@ Versionamento semântico adaptado ao ciclo do MHU (`MAJOR.MINOR`).
 
 ## [Unreleased] — MHU 1.1 (em preparação)
 
+### Added — diagnóstico de balanço hídrico
+
+- Nova aba **Balanco Hidrico** com resíduos por AC/passo e balanço de bacia (chuva vs chuva+recessão).
+- Equações: `Erro_AC = V_ini+V_prec+V_mont−V_inf−V_saida−V_fin`; `Erro_bacia = V_ini+V_prec−V_inf−V_exutorio−V_fin` (sem transferências internas).
+- Indicadores: erro abs/rel, coef. escoamento, % infiltrado/armazenado, lâminas médias, volume no exutório.
+- Gráficos de volumes acumulados e distribuição percentual; tabelas por AC.
+- Tolerância de fechamento numérico configurável (`Tol_balanco_m3`, padrão `1e-6`); explícito que **não** é validação física.
+- Exportação Excel ampliada (`Balanco_passos`, `Balanco_AC`, `Balanco_bacia`, acumulados, distribuição, meta).
+
 ### Changed — conectividade hidrológica entre ACs
 
 - Validação automática da rede convergente: IDs duplicados, montantes inexistentes/repetidos, auto-referência, ciclos, ACs desconectadas do exutório, múltiplos destinos a jusante, duplicação de volumes e exutório inválido.
