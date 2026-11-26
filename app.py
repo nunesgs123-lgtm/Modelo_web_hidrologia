@@ -36,6 +36,8 @@ GLOSSARIO_ROWS = [
     {"Termo": "Infiltracao_real_m_s", "Unidade": "m/s", "Descricao": "Taxa media de infiltracao real no passo = V_infiltracao / (A * dt)."},
     {"Termo": "Volume_infiltrado_m3", "Unidade": "m3", "Descricao": "Volume infiltrado no intervalo de integracao."},
     {"Termo": "Volume_infiltrado_acum_m3", "Unidade": "m3", "Descricao": "Volume infiltrado acumulado desde t=0."},
+    {"Termo": "Volume_escoado_m3", "Unidade": "m3", "Descricao": "Volume escoado no passo = V_disponivel - V_novo (= Q_out * dt)."},
+    {"Termo": "Residuo_implicito_m3", "Unidade": "m3", "Descricao": "Residuo de V_novo + dt*Q_Manning(V_novo) - V_disponivel apos o solver."},
     {"Termo": "Q_in_m3_s", "Unidade": "m3/s", "Descricao": "Vazao recebida das AC(s) a montante imediata."},
     {"Termo": "Q_out_m3_s", "Unidade": "m3/s", "Descricao": "Vazao de saida da AC (propagacao por Manning)."},
     {"Termo": "Q_ex_m3_s", "Unidade": "m3/s", "Descricao": "Vazao no exutorio selecionado."},
@@ -559,6 +561,187 @@ def solve_channel_depth(
     return y
 
 
+def validar_parametros_superficie_ac(
+    area_m2: float,
+    comprimento_m: float,
+    n_eq: float,
+    declividade: float,
+    ac_id: int | None = None,
+) -> None:
+    """Rejeita parametros fisicos invalidos (nao substitui por minimos silenciosos)."""
+    prefixo = f"AC {ac_id}: " if ac_id is not None else ""
+    checks = [
+        ("Area_m2", area_m2, True),
+        ("L_m", comprimento_m, True),
+        ("n_eq", n_eq, True),
+        ("S_m_m", declividade, True),
+    ]
+    for nome, valor, exige_positivo in checks:
+        v = float(valor)
+        if not np.isfinite(v):
+            raise ValueError(f"{prefixo}`{nome}` deve ser finito (recebido: {valor}).")
+        if exige_positivo and v <= 0:
+            raise ValueError(f"{prefixo}`{nome}` deve ser > 0 (recebido: {valor}).")
+
+
+def manning_vazao_superficie(
+    volume_m3: float,
+    area_m2: float,
+    comprimento_m: float,
+    n_eq: float,
+    declividade: float,
+) -> float:
+    """
+    Manning em plano inclinado:
+      q = (1/n) * h^(5/3) * sqrt(S)
+      Q = W * q,  W = A/L,  h = V/A
+    """
+    v = float(volume_m3)
+    if v <= 0.0:
+        return 0.0
+    w = area_m2 / comprimento_m
+    h = v / area_m2
+    return (w / n_eq) * (h ** (5.0 / 3.0)) * math.sqrt(declividade)
+
+
+def manning_dQ_dV_superficie(
+    volume_m3: float,
+    area_m2: float,
+    comprimento_m: float,
+    n_eq: float,
+    declividade: float,
+) -> float:
+    """Derivada dQ/dV para polimento Newton (V>0)."""
+    v = float(volume_m3)
+    if v <= 0.0:
+        return 0.0
+    # Q = C * V^(5/3), C = (W/n)*sqrt(S) / A^(5/3)
+    w = area_m2 / comprimento_m
+    c = (w / n_eq) * math.sqrt(declividade) / (area_m2 ** (5.0 / 3.0))
+    return c * (5.0 / 3.0) * (v ** (2.0 / 3.0))
+
+
+def solve_surface_storage_implicit(
+    v_disponivel: float,
+    dt: float,
+    area_m2: float,
+    comprimento_m: float,
+    n_eq: float,
+    declividade: float,
+    tol_abs: float = 1e-12,
+    tol_rel: float = 1e-10,
+    max_iter_bissection: int = 80,
+    max_iter_newton: int = 8,
+    ac_id: int | None = None,
+) -> dict[str, float | bool | int]:
+    """
+    Euler implicito volumetrico conservativo:
+      V_novo + dt * Q(V_novo) = V_disponivel
+    com Q de Manning em plano inclinado.
+
+    Resolve por bissecao em [0, V_disponivel] e polimento Newton opcional.
+    A vazao reportada e consistente com o volume transferido:
+      Q_out = (V_disponivel - V_novo) / dt
+    """
+    validar_parametros_superficie_ac(area_m2, comprimento_m, n_eq, declividade, ac_id=ac_id)
+    dt = float(dt)
+    if not np.isfinite(dt) or dt <= 0:
+        raise ValueError(f"Passo de integracao `dt` deve ser > 0 (recebido: {dt}).")
+    if not np.isfinite(v_disponivel):
+        raise ValueError(f"V_disponivel deve ser finito (recebido: {v_disponivel}).")
+    if not np.isfinite(tol_abs) or tol_abs < 0:
+        raise ValueError("`tol_abs` invalida.")
+    if not np.isfinite(tol_rel) or tol_rel < 0:
+        raise ValueError("`tol_rel` invalida.")
+
+    v_disp = max(float(v_disponivel), 0.0)
+    if v_disp == 0.0:
+        return {
+            "v_novo": 0.0,
+            "h_novo": 0.0,
+            "q_out": 0.0,
+            "v_escoado": 0.0,
+            "residuo": 0.0,
+            "convergiu": True,
+            "n_iter": 0,
+        }
+
+    def residuo(v: float) -> float:
+        return float(v + dt * manning_vazao_superficie(v, area_m2, comprimento_m, n_eq, declividade) - v_disp)
+
+    # g(0) = -v_disp <= 0; g(v_disp) = dt*Q(v_disp) >= 0
+    lo, hi = 0.0, v_disp
+    g_lo, g_hi = residuo(lo), residuo(hi)
+    if g_hi < 0:
+        # Numericamente Q~0: todo volume permanece armazenado
+        v_star = v_disp
+        n_iter = 0
+        convergiu = True
+    else:
+        v_star = 0.5 * (lo + hi)
+        n_iter = 0
+        convergiu = False
+        escala = max(v_disp, 1.0)
+        for n_iter in range(1, max_iter_bissection + 1):
+            v_star = 0.5 * (lo + hi)
+            g_mid = residuo(v_star)
+            if abs(g_mid) <= tol_abs or abs(g_mid) <= tol_rel * escala:
+                convergiu = True
+                break
+            if (hi - lo) <= max(tol_abs, tol_rel * escala):
+                convergiu = True
+                break
+            if g_mid > 0.0:
+                hi = v_star
+                g_hi = g_mid
+            else:
+                lo = v_star
+                g_lo = g_mid
+
+        # Polimento Newton (complementar); mantem bissecao como garantia
+        v_n = float(v_star)
+        for _ in range(max_iter_newton):
+            q = manning_vazao_superficie(v_n, area_m2, comprimento_m, n_eq, declividade)
+            g = v_n + dt * q - v_disp
+            if abs(g) <= tol_abs or abs(g) <= tol_rel * escala:
+                v_star = v_n
+                convergiu = True
+                break
+            dq = manning_dQ_dV_superficie(v_n, area_m2, comprimento_m, n_eq, declividade)
+            dg = 1.0 + dt * dq
+            if abs(dg) < 1e-30:
+                break
+            v_n = v_n - g / dg
+            if v_n < 0.0 or v_n > v_disp:
+                break
+            v_star = v_n
+
+    v_novo = min(max(float(v_star), 0.0), v_disp)
+    v_escoado = v_disp - v_novo
+    if v_escoado < 0.0:
+        v_escoado = 0.0
+        v_novo = v_disp
+    q_out = v_escoado / dt
+    h_novo = v_novo / area_m2
+    res = float(v_novo + dt * manning_vazao_superficie(v_novo, area_m2, comprimento_m, n_eq, declividade) - v_disp)
+
+    if not convergiu and abs(res) > max(tol_abs, tol_rel * max(v_disp, 1.0)):
+        raise RuntimeError(
+            f"Solver superficial nao convergiu (AC={ac_id}, residuo={res:.3e}, "
+            f"V_disp={v_disp:.6g}, dt={dt})."
+        )
+
+    return {
+        "v_novo": float(v_novo),
+        "h_novo": float(h_novo),
+        "q_out": float(q_out),
+        "v_escoado": float(v_escoado),
+        "residuo": float(res),
+        "convergiu": bool(convergiu or abs(res) <= max(tol_abs, tol_rel * max(v_disp, 1.0))),
+        "n_iter": int(n_iter),
+    }
+
+
 def solve_surface_depth_implicit(
     h_prev: float,
     dt: float,
@@ -568,36 +751,39 @@ def solve_surface_depth_implicit(
     tol: float = 1e-9,
 ) -> float:
     """
-    Resolve h_(t+1) por Euler implicito para:
-      dh/dt = input_rate - alpha * h^(5/3)
-    onde alpha = (w_eq / area) * (1/n_eq) * sqrt(S).
+    Compatibilidade legada (formulação em lamina).
+    Preferir `solve_surface_storage_implicit` no nucleo atual.
     """
-    h_prev = max(float(h_prev), 0.0)
-    dt = max(float(dt), 0.0)
-    input_rate_m_s = float(input_rate_m_s)
-    alpha_m_2_3_s = max(float(alpha_m_2_3_s), 0.0)
-    if dt <= 0:
-        return h_prev
-
-    if alpha_m_2_3_s <= 0:
+    h_prev = float(h_prev)
+    dt = float(dt)
+    if not np.isfinite(h_prev) or h_prev < 0:
+        raise ValueError("`h_prev` deve ser finito e >= 0.")
+    if not np.isfinite(dt) or dt <= 0:
+        raise ValueError("`dt` deve ser > 0.")
+    if not np.isfinite(input_rate_m_s):
+        raise ValueError("`input_rate_m_s` deve ser finito.")
+    if not np.isfinite(alpha_m_2_3_s) or alpha_m_2_3_s < 0:
+        raise ValueError("`alpha_m_2_3_s` deve ser finito e >= 0.")
+    if alpha_m_2_3_s == 0.0:
         return max(0.0, h_prev + dt * input_rate_m_s)
 
-    # Chute inicial explicito truncado em zero.
-    h = max(0.0, h_prev + dt * (input_rate_m_s - alpha_m_2_3_s * (h_prev ** (5.0 / 3.0))))
-    for _ in range(max_iter):
-        h_eps = max(h, 1e-12)
-        h_53 = h_eps ** (5.0 / 3.0)
-        f = h - h_prev - dt * (input_rate_m_s - alpha_m_2_3_s * h_53)
-        df = 1.0 + dt * alpha_m_2_3_s * (5.0 / 3.0) * (h_eps ** (2.0 / 3.0))
-        if abs(df) < 1e-15:
+    # Equivalente volumetrico unitario (A=1, W=alpha*n/sqrt(S) implícito via alpha)
+    # Mantem Newton+bisseção em h: h + dt*alpha*h^(5/3) = h_prev + dt*input
+    rhs = h_prev + dt * input_rate_m_s
+    if rhs <= 0:
+        return 0.0
+    lo, hi = 0.0, rhs
+    h = 0.5 * (lo + hi)
+    for _ in range(max(max_iter, 40)):
+        g = h + dt * alpha_m_2_3_s * (h ** (5.0 / 3.0) if h > 0 else 0.0) - rhs
+        if abs(g) <= tol or abs(g) <= 1e-10 * max(abs(rhs), 1.0):
             break
-        h_new = h - f / df
-        h_new = max(0.0, h_new)
-        if abs(h_new - h) <= tol:
-            h = h_new
-            break
-        h = h_new
-    return max(0.0, h)
+        if g > 0:
+            hi = h
+        else:
+            lo = h
+        h = 0.5 * (lo + hi)
+    return max(0.0, min(h, rhs))
 
 
 def run_simulation(
@@ -674,6 +860,34 @@ def run_simulation(
     ac_ids = ac_df["ID_AC"].tolist()
     id_to_idx = {ac_id: i for i, ac_id in enumerate(ac_ids)}
 
+    # Validacao explicita de parametros de superficie (sem clamps silenciosos)
+    for _, row in ac_df.iterrows():
+        ac_id_v = int(row["ID_AC"])
+        validar_parametros_superficie_ac(
+            area_m2=float(row["Area_m2"]),
+            comprimento_m=float(row["L_m"]),
+            n_eq=float(row["n_eq"]),
+            declividade=float(row["S_m_m"]),
+            ac_id=ac_id_v,
+        )
+        h0_v = float(row["h0_m"])
+        if not np.isfinite(h0_v) or h0_v < 0:
+            raise ValueError(f"AC {ac_id_v}: `h0_m` deve ser finito e >= 0 (recebido: {row['h0_m']}).")
+        infil_v = float(row["Infiltracao_eq_mm_h"])
+        if not np.isfinite(infil_v) or infil_v < 0:
+            raise ValueError(
+                f"AC {ac_id_v}: `Infiltracao_eq_mm_h` deve ser finito e >= 0 (recebido: {row['Infiltracao_eq_mm_h']})."
+            )
+    for nome, valor in [
+        ("B_canal", b_canal),
+        ("S_canal", s_canal),
+        ("n_canal", n_canal),
+    ]:
+        if not np.isfinite(float(valor)) or float(valor) <= 0:
+            raise ValueError(f"`{nome}` deve ser finito e > 0 (recebido: {valor}).")
+    if not np.isfinite(float(nivel_base)):
+        raise ValueError(f"`nivel_base` deve ser finito (recebido: {nivel_base}).")
+
     h = np.zeros((n_steps, n_ac), dtype=float)
     q_out = np.zeros((n_steps, n_ac), dtype=float)
     q_in = np.zeros((n_steps, n_ac), dtype=float)
@@ -682,18 +896,19 @@ def run_simulation(
     infil_real = np.zeros((n_steps, n_ac), dtype=float)
     vol_inf = np.zeros((n_steps, n_ac), dtype=float)
     vol_inf_acum = np.zeros((n_steps, n_ac), dtype=float)
+    vol_escoado = np.zeros((n_steps, n_ac), dtype=float)
+    residuo_impl = np.zeros((n_steps, n_ac), dtype=float)
     t_umido_s = np.zeros(n_ac, dtype=float)
 
     # t = 0: somente condicoes iniciais (sem balanco hidrico)
     for j, row in ac_df.iterrows():
-        h[0, j] = max(float(row["h0_m"]), 0.0)
+        h[0, j] = float(row["h0_m"])
 
     for j, row in ac_df.iterrows():
-        area = max(float(row["Area_m2"]), 1e-9)
-        comp = max(float(row["L_m"]), 1e-9)
-        n_eq = max(float(row["n_eq"]), 1e-9)
-        decliv = max(float(row["S_m_m"]), 1e-9)
-        w_eq = area / comp
+        area = float(row["Area_m2"])
+        comp = float(row["L_m"])
+        n_eq = float(row["n_eq"])
+        decliv = float(row["S_m_m"])
         h0 = h[0, j]
         upstream_ids = parse_upstream_ids(row["ACs_montante_ids"])
         qin0 = 0.0
@@ -701,30 +916,35 @@ def run_simulation(
             if up_id in id_to_idx:
                 qin0 += q_out[0, id_to_idx[up_id]]
         q_in[0, j] = qin0
-        q_unit0 = (1.0 / n_eq) * (h0 ** (5.0 / 3.0)) * math.sqrt(decliv)
-        q_out[0, j] = q_unit0 * w_eq
+        q_out[0, j] = manning_vazao_superficie(h0 * area, area, comp, n_eq, decliv)
         i_excesso[0, j] = 0.0
-        infil_fc0 = max(float(row["Infiltracao_eq_mm_h"]), 0.0) / 3600000.0
+        infil_fc0 = float(row["Infiltracao_eq_mm_h"]) / 3600000.0
         if usar_horton:
-            f0_0 = max(infil_fc0 * max(horton_f0_multiplicador, 1.0), infil_fc0)
-            infil_cap[0, j] = f0_0
+            f0_0 = infil_fc0 * max(float(horton_f0_multiplicador), 1.0)
+            infil_cap[0, j] = max(f0_0, infil_fc0)
         else:
             infil_cap[0, j] = infil_fc0
         infil_real[0, j] = 0.0
         vol_inf[0, j] = 0.0
         vol_inf_acum[0, j] = 0.0
+        vol_escoado[0, j] = 0.0
+        residuo_impl[0, j] = 0.0
 
     for t in range(1, n_steps):
         p_ms = float(chuva_ms[t])
+        if p_ms < 0.0:
+            raise ValueError(f"Taxa de precipitacao negativa no passo {t}: {p_ms}")
         for j, row in ac_df.iterrows():
-            area = max(float(row["Area_m2"]), 1e-9)
-            comp = max(float(row["L_m"]), 1e-9)
-            n_eq = max(float(row["n_eq"]), 1e-9)
-            infil_fc_mmh = max(float(row["Infiltracao_eq_mm_h"]), 0.0)
-            decliv = max(float(row["S_m_m"]), 1e-9)
-            w_eq = area / comp
+            ac_id = int(row["ID_AC"])
+            area = float(row["Area_m2"])
+            comp = float(row["L_m"])
+            n_eq = float(row["n_eq"])
+            infil_fc_mmh = float(row["Infiltracao_eq_mm_h"])
+            decliv = float(row["S_m_m"])
 
-            h_prev = max(float(h[t - 1, j]), 0.0)
+            h_prev = float(h[t - 1, j])
+            if h_prev < 0.0:
+                raise RuntimeError(f"AC {ac_id}: armazenamento negativo detectado em t={t-1}.")
 
             # Vazao a montante no mesmo passo (ordem topologica)
             upstream_ids = parse_upstream_ids(row["ACs_montante_ids"])
@@ -732,54 +952,63 @@ def run_simulation(
             for up_id in upstream_ids:
                 if up_id in id_to_idx:
                     qin_t += q_out[t, id_to_idx[up_id]]
+            if qin_t < 0.0:
+                raise RuntimeError(f"AC {ac_id}: Q_in negativo no passo {t}.")
             q_in[t, j] = qin_t
 
             # Capacidade de infiltracao f (m/s): constante ou Horton
             infil_fc_ms = infil_fc_mmh / 3600000.0
             if usar_horton:
                 t_umido_h = t_umido_s[j] / 3600.0
-                infil_f0_ms = max(infil_fc_ms * max(horton_f0_multiplicador, 1.0), infil_fc_ms)
+                infil_f0_ms = infil_fc_ms * max(float(horton_f0_multiplicador), 1.0)
+                if infil_f0_ms < infil_fc_ms:
+                    infil_f0_ms = infil_fc_ms
                 f_ms = infil_fc_ms + (infil_f0_ms - infil_fc_ms) * math.exp(
-                    -max(horton_k_h_inv, 0.0) * t_umido_h
+                    -max(float(horton_k_h_inv), 0.0) * t_umido_h
                 )
             else:
                 f_ms = infil_fc_ms
-            f_ms = max(float(f_ms), 0.0)
+            if f_ms < 0.0:
+                raise RuntimeError(f"AC {ac_id}: capacidade de infiltracao negativa.")
             infil_cap[t, j] = f_ms
 
-            # Balanco volumetrico (infiltracao sobre agua disponivel, nao so sobre a chuva)
+            # Balanco volumetrico ate a infiltracao
             v_anterior = h_prev * area
-            v_precipitacao = max(p_ms, 0.0) * area * dt
-            v_montante = max(qin_t, 0.0) * dt
-            v_disponivel = max(v_anterior + v_precipitacao + v_montante, 0.0)
-            v_infiltracao = min(v_disponivel, f_ms * area * dt)
-            v_infiltracao = max(v_infiltracao, 0.0)
-            v_restante = max(v_disponivel - v_infiltracao, 0.0)
+            v_precipitacao = p_ms * area * dt
+            v_montante = qin_t * dt
+            v_bruto = v_anterior + v_precipitacao + v_montante
+            if v_bruto < 0.0:
+                raise RuntimeError(f"AC {ac_id}: volume bruto negativo antes da infiltracao.")
+            v_infiltracao = min(v_bruto, f_ms * area * dt)
+            if v_infiltracao < 0.0:
+                v_infiltracao = 0.0
+            v_apos_inf = v_bruto - v_infiltracao
+            if v_apos_inf < 0.0:
+                v_apos_inf = 0.0
 
             vol_inf[t, j] = v_infiltracao
             vol_inf_acum[t, j] = vol_inf_acum[t - 1, j] + v_infiltracao
-            infil_rate = v_infiltracao / (area * dt) if dt > 0 else 0.0
-            infil_real[t, j] = max(infil_rate, 0.0)
+            infil_rate = v_infiltracao / (area * dt)
+            infil_real[t, j] = infil_rate
             i_excesso[t, j] = max(0.0, p_ms + qin_t / area - infil_rate)
 
-            # Relogio umido Horton: avanca com agua disponivel (chuva, lamina ou montante)
-            if usar_horton and v_disponivel > 0.0 and f_ms > 0.0:
+            if usar_horton and v_bruto > 0.0 and f_ms > 0.0:
                 t_umido_s[j] += dt
 
-            # Propagacao a partir da lamina pos-infiltracao (sem recontar P nem Q_in)
-            h_apos_inf = v_restante / area
-            alpha = (w_eq / area) * (1.0 / n_eq) * math.sqrt(decliv)
-            h_new = solve_surface_depth_implicit(
-                h_prev=h_apos_inf,
+            # Propagacao: V_novo + dt*Q(V_novo) = V_disponivel (apos infiltracao)
+            sol = solve_surface_storage_implicit(
+                v_disponivel=v_apos_inf,
                 dt=dt,
-                input_rate_m_s=0.0,
-                alpha_m_2_3_s=alpha,
+                area_m2=area,
+                comprimento_m=comp,
+                n_eq=n_eq,
+                declividade=decliv,
+                ac_id=ac_id,
             )
-            h_new = max(float(h_new), 0.0)
-            q_unit_new = (1.0 / n_eq) * (h_new ** (5.0 / 3.0)) * math.sqrt(decliv)
-            qout_t = q_unit_new * w_eq
-            q_out[t, j] = max(qout_t, 0.0)
-            h[t, j] = h_new
+            h[t, j] = float(sol["h_novo"])
+            q_out[t, j] = float(sol["q_out"])
+            vol_escoado[t, j] = float(sol["v_escoado"])
+            residuo_impl[t, j] = float(sol["residuo"])
 
     if exutorio_id not in id_to_idx:
         exutorio_id = ac_ids[-1]
@@ -817,6 +1046,8 @@ def run_simulation(
                 "Infiltracao_real_m_s": infil_real[:, j],
                 "Volume_infiltrado_m3": vol_inf[:, j],
                 "Volume_infiltrado_acum_m3": vol_inf_acum[:, j],
+                "Volume_escoado_m3": vol_escoado[:, j],
+                "Residuo_implicito_m3": residuo_impl[:, j],
                 "Q_in_m3_s": q_in[:, j],
                 "Q_out_m3_s": q_out[:, j],
                 "h_m": h[:, j],
@@ -1144,7 +1375,7 @@ elif pagina == "Instrucoes":
 - O intervalo dos registros de precipitacao e independente do passo interno de integracao (ex.: registros a cada 600 s e integracao a 60 s).
 - Simulacoes antigas com coluna `P_mm_h` sao interpretadas como **intensidade em mm/h**.
 - A infiltracao usa balanco volumetrico (lamina + chuva + montante); a agua armazenada pode infiltrar apos o fim da chuva. Opcoes: capacidade constante ou Horton.
-- A propagacao superficial usa Manning em plano inclinado; a conversao para nivel no canal usa Manning em secao retangular.
+- A propagacao superficial usa Euler implicito volumetrico com Manning em plano inclinado (`V + dt·Q(V) = V_disp`, bissecao); a conversao para nivel no canal usa Manning em secao retangular.
 - Se alterar `Numero de ACs`, recarregue a pagina se necessario para atualizar linhas padrao das US.
         """
     )

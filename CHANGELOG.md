@@ -5,6 +5,15 @@ Versionamento semântico adaptado ao ciclo do MHU (`MAJOR.MINOR`).
 
 ## [Unreleased] — MHU 1.1 (em preparação)
 
+### Changed — propagação superficial implícita conservativa
+
+- Equação volumétrica: `V_novo + dt·Q(V_novo) = V_disponivel` com Manning `Q=(W/n)·(V/A)^(5/3)·√S`, `W=A/L`.
+- `V_disponivel` = volume após precipitação, armazenamento anterior, montante e infiltração.
+- Solver por **bisseção** em `[0, V_disp]` + polimento Newton; tolerâncias abs/rel e resíduo final.
+- `Q_out = (V_disp - V_novo)/dt` (consistente com o volume transferido); `h≥0`; sem clamps silenciosos de parâmetros físicos inválidos.
+- Saídas adicionais: `Volume_escoado_m3`, `Residuo_implicito_m3`.
+- Testes e documentação: `test_convergencia_superficie.py`, `CONVERGENCIA_NUMERICA.md`.
+
 ### Changed — infiltração por balanço volumétrico
 
 - Substitui `infil = min(chuva, f)` por balanço por AC e passo:
