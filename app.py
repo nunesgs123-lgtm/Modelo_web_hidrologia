@@ -31,7 +31,11 @@ GLOSSARIO_ROWS = [
     {"Termo": "P_mm_h", "Unidade": "mm/h", "Descricao": "Intensidade de precipitacao. Em registros, o valor no fim do intervalo representa a chuva do intervalo anterior."},
     {"Termo": "P_mm", "Unidade": "mm", "Descricao": "Precipitacao acumulada no intervalo de registro. O valor no fim do intervalo e a lamina caida no intervalo anterior."},
     {"Termo": "P_m_s", "Unidade": "m/s", "Descricao": "Taxa de precipitacao em unidades SI usada no balanco (constante dentro de cada intervalo de registro)."},
-    {"Termo": "i_excesso_m_s", "Unidade": "m/s", "Descricao": "Chuva efetiva = max(P - infiltracao, 0)."},
+    {"Termo": "i_excesso_m_s", "Unidade": "m/s", "Descricao": "Taxa liquida apos infiltracao volumetrica: max(p + Q_in/A - f_real, 0)."},
+    {"Termo": "Infiltracao_cap_m_s", "Unidade": "m/s", "Descricao": "Capacidade de infiltracao f no passo (constante ou Horton)."},
+    {"Termo": "Infiltracao_real_m_s", "Unidade": "m/s", "Descricao": "Taxa media de infiltracao real no passo = V_infiltracao / (A * dt)."},
+    {"Termo": "Volume_infiltrado_m3", "Unidade": "m3", "Descricao": "Volume infiltrado no intervalo de integracao."},
+    {"Termo": "Volume_infiltrado_acum_m3", "Unidade": "m3", "Descricao": "Volume infiltrado acumulado desde t=0."},
     {"Termo": "Q_in_m3_s", "Unidade": "m3/s", "Descricao": "Vazao recebida das AC(s) a montante imediata."},
     {"Termo": "Q_out_m3_s", "Unidade": "m3/s", "Descricao": "Vazao de saida da AC (propagacao por Manning)."},
     {"Termo": "Q_ex_m3_s", "Unidade": "m3/s", "Descricao": "Vazao no exutorio selecionado."},
@@ -619,7 +623,8 @@ def run_simulation(
     - intensidade constante dentro de cada intervalo de registro;
     - registro no fim do intervalo = chuva do intervalo anterior;
     - passo interno `dt` independente do intervalo de registro;
-    - periodo opcional de recessao com P=0 apos o fim da chuva.
+    - periodo opcional de recessao com P=0 apos o fim da chuva;
+    - infiltracao por balanco volumetrico (lamina + precipitacao + montante).
 
     Compatibilidade: `chuva_mmh` legado e interpretado como intensidade (mm/h).
     """
@@ -673,7 +678,10 @@ def run_simulation(
     q_out = np.zeros((n_steps, n_ac), dtype=float)
     q_in = np.zeros((n_steps, n_ac), dtype=float)
     i_excesso = np.zeros((n_steps, n_ac), dtype=float)
+    infil_cap = np.zeros((n_steps, n_ac), dtype=float)
     infil_real = np.zeros((n_steps, n_ac), dtype=float)
+    vol_inf = np.zeros((n_steps, n_ac), dtype=float)
+    vol_inf_acum = np.zeros((n_steps, n_ac), dtype=float)
     t_umido_s = np.zeros(n_ac, dtype=float)
 
     # t = 0: somente condicoes iniciais (sem balanco hidrico)
@@ -696,7 +704,15 @@ def run_simulation(
         q_unit0 = (1.0 / n_eq) * (h0 ** (5.0 / 3.0)) * math.sqrt(decliv)
         q_out[0, j] = q_unit0 * w_eq
         i_excesso[0, j] = 0.0
+        infil_fc0 = max(float(row["Infiltracao_eq_mm_h"]), 0.0) / 3600000.0
+        if usar_horton:
+            f0_0 = max(infil_fc0 * max(horton_f0_multiplicador, 1.0), infil_fc0)
+            infil_cap[0, j] = f0_0
+        else:
+            infil_cap[0, j] = infil_fc0
         infil_real[0, j] = 0.0
+        vol_inf[0, j] = 0.0
+        vol_inf_acum[0, j] = 0.0
 
     for t in range(1, n_steps):
         p_ms = float(chuva_ms[t])
@@ -708,24 +724,9 @@ def run_simulation(
             decliv = max(float(row["S_m_m"]), 1e-9)
             w_eq = area / comp
 
-            h_prev = h[t - 1, j]
-            if usar_horton and p_ms > 0:
-                t_umido_s[j] += dt
-            t_umido_h = t_umido_s[j] / 3600.0
+            h_prev = max(float(h[t - 1, j]), 0.0)
 
-            if usar_horton:
-                infil_f0_mmh = max(infil_fc_mmh * max(horton_f0_multiplicador, 1.0), infil_fc_mmh)
-                infil_cap_mmh = infil_fc_mmh + (infil_f0_mmh - infil_fc_mmh) * math.exp(
-                    -max(horton_k_h_inv, 0.0) * t_umido_h
-                )
-            else:
-                infil_cap_mmh = infil_fc_mmh
-            infil_t_ms = min(p_ms, infil_cap_mmh / 3600000.0)
-            infil_real[t, j] = infil_t_ms
-
-            i_eff = max(p_ms - infil_t_ms, 0.0)
-            i_excesso[t, j] = i_eff
-
+            # Vazao a montante no mesmo passo (ordem topologica)
             upstream_ids = parse_upstream_ids(row["ACs_montante_ids"])
             qin_t = 0.0
             for up_id in upstream_ids:
@@ -733,17 +734,51 @@ def run_simulation(
                     qin_t += q_out[t, id_to_idx[up_id]]
             q_in[t, j] = qin_t
 
+            # Capacidade de infiltracao f (m/s): constante ou Horton
+            infil_fc_ms = infil_fc_mmh / 3600000.0
+            if usar_horton:
+                t_umido_h = t_umido_s[j] / 3600.0
+                infil_f0_ms = max(infil_fc_ms * max(horton_f0_multiplicador, 1.0), infil_fc_ms)
+                f_ms = infil_fc_ms + (infil_f0_ms - infil_fc_ms) * math.exp(
+                    -max(horton_k_h_inv, 0.0) * t_umido_h
+                )
+            else:
+                f_ms = infil_fc_ms
+            f_ms = max(float(f_ms), 0.0)
+            infil_cap[t, j] = f_ms
+
+            # Balanco volumetrico (infiltracao sobre agua disponivel, nao so sobre a chuva)
+            v_anterior = h_prev * area
+            v_precipitacao = max(p_ms, 0.0) * area * dt
+            v_montante = max(qin_t, 0.0) * dt
+            v_disponivel = max(v_anterior + v_precipitacao + v_montante, 0.0)
+            v_infiltracao = min(v_disponivel, f_ms * area * dt)
+            v_infiltracao = max(v_infiltracao, 0.0)
+            v_restante = max(v_disponivel - v_infiltracao, 0.0)
+
+            vol_inf[t, j] = v_infiltracao
+            vol_inf_acum[t, j] = vol_inf_acum[t - 1, j] + v_infiltracao
+            infil_rate = v_infiltracao / (area * dt) if dt > 0 else 0.0
+            infil_real[t, j] = max(infil_rate, 0.0)
+            i_excesso[t, j] = max(0.0, p_ms + qin_t / area - infil_rate)
+
+            # Relogio umido Horton: avanca com agua disponivel (chuva, lamina ou montante)
+            if usar_horton and v_disponivel > 0.0 and f_ms > 0.0:
+                t_umido_s[j] += dt
+
+            # Propagacao a partir da lamina pos-infiltracao (sem recontar P nem Q_in)
+            h_apos_inf = v_restante / area
             alpha = (w_eq / area) * (1.0 / n_eq) * math.sqrt(decliv)
-            input_rate = i_eff + qin_t / area
             h_new = solve_surface_depth_implicit(
-                h_prev=h_prev,
+                h_prev=h_apos_inf,
                 dt=dt,
-                input_rate_m_s=input_rate,
+                input_rate_m_s=0.0,
                 alpha_m_2_3_s=alpha,
             )
+            h_new = max(float(h_new), 0.0)
             q_unit_new = (1.0 / n_eq) * (h_new ** (5.0 / 3.0)) * math.sqrt(decliv)
             qout_t = q_unit_new * w_eq
-            q_out[t, j] = qout_t
+            q_out[t, j] = max(qout_t, 0.0)
             h[t, j] = h_new
 
     if exutorio_id not in id_to_idx:
@@ -752,6 +787,7 @@ def run_simulation(
     q_ex = q_out[:, id_to_idx[exutorio_id]]
     nivel = solve_channel_depth(q_ex, b_canal, s_canal, n_canal, n_iter=5)
     cota = nivel + nivel_base
+    j_ex = id_to_idx[exutorio_id]
 
     df_saida = pd.DataFrame(
         {
@@ -762,6 +798,10 @@ def run_simulation(
             "Q_ex_m3_s": q_ex,
             "Nivel_m": nivel,
             "Cota_abs_m": cota,
+            "Infiltracao_cap_m_s": infil_cap[:, j_ex],
+            "Infiltracao_real_m_s": infil_real[:, j_ex],
+            "Volume_infiltrado_m3": vol_inf[:, j_ex],
+            "Volume_infiltrado_acum_m3": vol_inf_acum[:, j_ex],
         }
     )
 
@@ -773,7 +813,10 @@ def run_simulation(
                 "Tempo_s": tempo_s,
                 "ID_AC": ac_id,
                 "i_excesso_m_s": i_excesso[:, j],
+                "Infiltracao_cap_m_s": infil_cap[:, j],
                 "Infiltracao_real_m_s": infil_real[:, j],
+                "Volume_infiltrado_m3": vol_inf[:, j],
+                "Volume_infiltrado_acum_m3": vol_inf_acum[:, j],
                 "Q_in_m3_s": q_in[:, j],
                 "Q_out_m3_s": q_out[:, j],
                 "h_m": h[:, j],
@@ -1100,6 +1143,7 @@ elif pagina == "Instrucoes":
 
 - O intervalo dos registros de precipitacao e independente do passo interno de integracao (ex.: registros a cada 600 s e integracao a 60 s).
 - Simulacoes antigas com coluna `P_mm_h` sao interpretadas como **intensidade em mm/h**.
+- A infiltracao usa balanco volumetrico (lamina + chuva + montante); a agua armazenada pode infiltrar apos o fim da chuva. Opcoes: capacidade constante ou Horton.
 - A propagacao superficial usa Manning em plano inclinado; a conversao para nivel no canal usa Manning em secao retangular.
 - Se alterar `Numero de ACs`, recarregue a pagina se necessario para atualizar linhas padrao das US.
         """

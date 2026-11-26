@@ -5,6 +5,16 @@ Versionamento semântico adaptado ao ciclo do MHU (`MAJOR.MINOR`).
 
 ## [Unreleased] — MHU 1.1 (em preparação)
 
+### Changed — infiltração por balanço volumétrico
+
+- Substitui `infil = min(chuva, f)` por balanço por AC e passo:
+  `V_disp = h·A + p·A·dt + Q_in·dt`, `V_inf = min(V_disp, f·A·dt)`, depois propagação sobre `V_restante`.
+- Permite infiltrar lâmina armazenada e vazão de montante mesmo sem precipitação instantânea (recessão).
+- Mantém infiltração constante e Horton `f(t)=fc+(f0-fc)·exp(-k·t_úmido)` (`k` em h⁻¹, `t_úmido` em h).
+- Garantias: `V_inf ≥ 0`, `V_inf ≤ V_disp`, `f=0` ⇒ sem perdas, sem dupla contagem no Manning, `h ≥ 0`.
+- Saídas: `Infiltracao_cap_m_s`, `Infiltracao_real_m_s`, `Volume_infiltrado_m3`, `Volume_infiltrado_acum_m3`.
+- Parâmetros equivalentes por AC (ponderação US) **não** alterados nesta etapa.
+
 ### Changed — precipitação e discretização temporal
 
 - Entrada de chuva em **intensidade (mm/h)** ou **acumulado por intervalo (mm)**:
@@ -18,7 +28,6 @@ Versionamento semântico adaptado ao ciclo do MHU (`MAJOR.MINOR`).
 - Interface: precipitação acumulada total, intensidade máxima e duração do evento.
 - Compatibilidade: simulações antigas com `P_mm_h` interpretadas explicitamente como mm/h; `dt_seg` legado mapeado para intervalo e integração iguais.
 - Glossário, instruções e persistência (`unidade_chuva`, `intervalo_registro_s`, `dt_integracao_s`, `tempo_recessao_min`) atualizados.
-- Demais processos físicos (infiltração, Manning, canal, conectividade) **não** alterados nesta etapa.
 
 ### Adicionado (etapa de preparação)
 
