@@ -15,18 +15,22 @@ import streamlit as st
 st.set_page_config(page_title="Modelo Hidrologico Urbano", layout="wide")
 
 GLOSSARIO_ROWS = [
-    {"Termo": "Delta_t_seg", "Unidade": "s", "Descricao": "Passo de tempo da simulacao."},
-    {"Termo": "Duracao_chuva_min", "Unidade": "min", "Descricao": "Duracao total do evento; define o numero de passos ativos."},
-    {"Termo": "N_passos_ativos", "Unidade": "-", "Descricao": "Numero de intervalos (inclui passo inicial t=0 quando aplicavel)."},
+    {"Termo": "Intervalo_registro_s", "Unidade": "s", "Descricao": "Intervalo temporal entre registros de precipitacao (ex.: 600 s)."},
+    {"Termo": "Delta_t_integracao_s", "Unidade": "s", "Descricao": "Passo interno de integracao numerica do modelo (pode ser menor que o intervalo de registro)."},
+    {"Termo": "Duracao_chuva_min", "Unidade": "min", "Descricao": "Duracao do periodo com registros de chuva (exclui recessao)."},
+    {"Termo": "Tempo_recessao_min", "Unidade": "min", "Descricao": "Periodo adicional apos o fim da chuva com P=0 para avaliar a recessao do hidrograma."},
+    {"Termo": "Unidade_chuva", "Unidade": "-", "Descricao": "Unidade de entrada: intensidade (mm/h) ou acumulado por intervalo (mm). Simulacoes antigas: P_mm_h = mm/h."},
+    {"Termo": "N_passos_ativos", "Unidade": "-", "Descricao": "Numero de instantes de saida (inclui t=0 apenas como condicao inicial)."},
     {"Termo": "Area_m2", "Unidade": "m2", "Descricao": "Area de contribuicao da AC."},
     {"Termo": "L_m", "Unidade": "m", "Descricao": "Comprimento caracteristico de escoamento na AC."},
     {"Termo": "S_m_m", "Unidade": "m/m", "Descricao": "Declividade da superficie de escoamento na AC."},
     {"Termo": "ACs_montante_ids", "Unidade": "-", "Descricao": "IDs das AC imediatamente a montante, separados por ponto e virgula (ex.: 1;2)."},
-    {"Termo": "h0_m", "Unidade": "m", "Descricao": "Lamina inicial de agua superficial na AC."},
+    {"Termo": "h0_m", "Unidade": "m", "Descricao": "Lamina inicial de agua superficial na AC (condicao em t=0)."},
     {"Termo": "Infiltracao_eq_mm_h", "Unidade": "mm/h", "Descricao": "Taxa de infiltracao equivalente ponderada por area de US."},
     {"Termo": "n_eq", "Unidade": "-", "Descricao": "Coeficiente de Manning equivalente ponderado por area de US."},
-    {"Termo": "P_mm_h", "Unidade": "mm/h", "Descricao": "Intensidade de precipitacao no intervalo."},
-    {"Termo": "P_m_s", "Unidade": "m/s", "Descricao": "Precipitacao convertida para unidades SI."},
+    {"Termo": "P_mm_h", "Unidade": "mm/h", "Descricao": "Intensidade de precipitacao. Em registros, o valor no fim do intervalo representa a chuva do intervalo anterior."},
+    {"Termo": "P_mm", "Unidade": "mm", "Descricao": "Precipitacao acumulada no intervalo de registro. O valor no fim do intervalo e a lamina caida no intervalo anterior."},
+    {"Termo": "P_m_s", "Unidade": "m/s", "Descricao": "Taxa de precipitacao em unidades SI usada no balanco (constante dentro de cada intervalo de registro)."},
     {"Termo": "i_excesso_m_s", "Unidade": "m/s", "Descricao": "Chuva efetiva = max(P - infiltracao, 0)."},
     {"Termo": "Q_in_m3_s", "Unidade": "m3/s", "Descricao": "Vazao recebida das AC(s) a montante imediata."},
     {"Termo": "Q_out_m3_s", "Unidade": "m3/s", "Descricao": "Vazao de saida da AC (propagacao por Manning)."},
@@ -41,6 +45,10 @@ GLOSSARIO_ROWS = [
     {"Termo": "R2 (Pearson)", "Unidade": "-", "Descricao": "Coeficiente de determinacao linear: quadrado da correlacao de Pearson entre observado e simulado."},
     {"Termo": "RMSE / MAE / Vies", "Unidade": "m", "Descricao": "Erro quadratico medio, erro absoluto medio e vies medio (S - O) para nivel."},
 ]
+
+PASSOS_INTEGRACAO_PERMITIDOS = [600, 300, 120, 60, 30, 10, 5]
+UNIDADE_CHUVA_INTENSIDADE = "mm/h"
+UNIDADE_CHUVA_ACUMULADA = "mm"
 
 # Referencias para calibracao (ordens de grandeza; ajustar ao local e ao evento)
 CALIBRACAO_USO_SOLO = [
@@ -217,6 +225,84 @@ def salvar_simulacoes_salvas(data: dict) -> None:
     SIM_STORE_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def passos_integracao_validos(intervalo_registro_s: int) -> list[int]:
+    ir = int(intervalo_registro_s)
+    return [p for p in PASSOS_INTEGRACAO_PERMITIDOS if ir % p == 0]
+
+
+def converter_precipitacao_para_taxa_m_s(
+    valor: float,
+    unidade: str,
+    intervalo_registro_s: float,
+) -> float:
+    """Converte registro de chuva em taxa SI (m/s)."""
+    v = float(valor)
+    if not np.isfinite(v) or v <= 0:
+        return 0.0
+    if unidade == UNIDADE_CHUVA_ACUMULADA:
+        dt_r = max(float(intervalo_registro_s), 1e-12)
+        return v / (1000.0 * dt_r)
+    return v / 3600000.0
+
+
+def extrair_valores_chuva_df(chuva_df: pd.DataFrame, unidade: str) -> np.ndarray:
+    """Extrai serie de registros. Legado: coluna P_mm_h = intensidade mm/h."""
+    if unidade == UNIDADE_CHUVA_ACUMULADA and "P_mm" in chuva_df.columns:
+        col = "P_mm"
+    elif "P_mm_h" in chuva_df.columns:
+        col = "P_mm_h"
+    elif "P_mm" in chuva_df.columns:
+        col = "P_mm"
+    else:
+        raise ValueError("Tabela de chuva sem coluna `P_mm_h` ou `P_mm`.")
+    return pd.to_numeric(chuva_df[col], errors="coerce").astype(float).to_numpy()
+
+
+def metricas_precipitacao(
+    valores: np.ndarray,
+    unidade: str,
+    intervalo_registro_s: float,
+) -> dict[str, float]:
+    """Metricas do evento a partir dos registros (t=0 nao contribui volume)."""
+    vals = np.asarray(valores, dtype=float)
+    dt_r = float(intervalo_registro_s)
+    if len(vals) <= 1 or dt_r <= 0:
+        return {"P_acum_mm": 0.0, "I_max_mm_h": 0.0, "Duracao_evento_min": 0.0}
+    serie = np.clip(vals[1:], 0.0, None)
+    if unidade == UNIDADE_CHUVA_ACUMULADA:
+        p_acum = float(np.nansum(serie))
+        i_max = float(np.nanmax(serie) * 3600.0 / dt_r) if len(serie) else 0.0
+    else:
+        p_acum = float(np.nansum(serie * dt_r / 3600.0))
+        i_max = float(np.nanmax(serie)) if len(serie) else 0.0
+    if not np.isfinite(i_max):
+        i_max = 0.0
+    duracao_min = (len(vals) - 1) * dt_r / 60.0
+    return {"P_acum_mm": p_acum, "I_max_mm_h": i_max, "Duracao_evento_min": duracao_min}
+
+
+def taxa_chuva_no_passo(
+    t_end_s: float,
+    chuva_registros: np.ndarray,
+    intervalo_registro_s: float,
+    unidade: str,
+    tempo_chuva_s: float,
+) -> float:
+    """
+    Intensidade constante no intervalo de registro.
+    O registro no instante k*dt_r representa a chuva ocorrida em ((k-1)*dt_r, k*dt_r].
+    """
+    if t_end_s <= 0 or t_end_s > tempo_chuva_s + 1e-9:
+        return 0.0
+    dt_r = float(intervalo_registro_s)
+    if dt_r <= 0:
+        return 0.0
+    k = int(math.ceil(t_end_s / dt_r - 1e-12))
+    if k < 1 or k >= len(chuva_registros):
+        return 0.0
+    return converter_precipitacao_para_taxa_m_s(chuva_registros[k], unidade, dt_r)
+
+
 def gerar_payload_simulacao(
     titulo: str,
     dt_seg: int,
@@ -234,16 +320,27 @@ def gerar_payload_simulacao(
     ac_df: pd.DataFrame,
     us_df: pd.DataFrame,
     chuva_df: pd.DataFrame,
+    intervalo_registro_s: int | None = None,
+    dt_integracao_s: int | None = None,
+    unidade_chuva: str = UNIDADE_CHUVA_INTENSIDADE,
+    tempo_recessao_min: float = 0.0,
 ) -> dict:
     start_hhmm = st.session_state.get("hora_inicio_evento", "12:00")
     end_hhmm = st.session_state.get("hora_fim_evento", "12:40")
+    dt_int = int(dt_integracao_s if dt_integracao_s is not None else dt_seg)
+    dt_reg = int(intervalo_registro_s if intervalo_registro_s is not None else dt_seg)
     return {
         "id": datetime.utcnow().strftime("%Y%m%d%H%M%S%f"),
         "titulo": titulo.strip() if titulo.strip() else f"Simulação {datetime.now().strftime('%d/%m/%Y %H:%M')}",
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "params": {
-            "dt_seg": int(dt_seg),
+            # dt_seg mantido = passo de integracao (compatibilidade com saves antigos)
+            "dt_seg": dt_int,
+            "dt_integracao_s": dt_int,
+            "intervalo_registro_s": dt_reg,
             "duracao_min": int(duracao_min),
+            "tempo_recessao_min": float(tempo_recessao_min),
+            "unidade_chuva": str(unidade_chuva),
             "n_ac": int(n_ac),
             "exutorio_id": int(exutorio_id),
             "b_canal": float(b_canal),
@@ -265,8 +362,14 @@ def gerar_payload_simulacao(
 
 def aplicar_payload_em_session(payload: dict) -> None:
     p = payload.get("params", {})
-    st.session_state["dt_seg"] = int(p.get("dt_seg", 600))
+    dt_legado = int(p.get("dt_seg", 600))
+    st.session_state["intervalo_registro_s"] = int(p.get("intervalo_registro_s", dt_legado))
+    st.session_state["dt_integracao_s"] = int(p.get("dt_integracao_s", dt_legado))
+    st.session_state["dt_seg"] = int(st.session_state["dt_integracao_s"])
     st.session_state["duracao_min"] = int(p.get("duracao_min", 40))
+    st.session_state["tempo_recessao_min"] = float(p.get("tempo_recessao_min", 0.0))
+    # Simulacoes antigas: registros P_mm_h sao intensidades em mm/h
+    st.session_state["unidade_chuva"] = str(p.get("unidade_chuva", UNIDADE_CHUVA_INTENSIDADE))
     st.session_state["n_ac"] = int(p.get("n_ac", 3))
     st.session_state["exutorio_id"] = int(p.get("exutorio_id", st.session_state["n_ac"]))
     st.session_state["b_canal"] = float(p.get("b_canal", 4.0))
@@ -303,12 +406,37 @@ def validar_campos_obrigatorios(
     ac_df: pd.DataFrame,
     us_df: pd.DataFrame,
     chuva_df: pd.DataFrame,
+    intervalo_registro_s: int | None = None,
+    unidade_chuva: str = UNIDADE_CHUVA_INTENSIDADE,
+    tempo_recessao_min: float = 0.0,
 ) -> list[str]:
     erros = []
-    if dt_seg <= 0:
-        erros.append("`Delta t (s)` deve ser maior que zero.")
+    dt_int = int(dt_seg)
+    dt_reg = int(intervalo_registro_s if intervalo_registro_s is not None else dt_seg)
+    if dt_reg <= 0:
+        erros.append("`Intervalo de registro da chuva (s)` deve ser maior que zero.")
+    if dt_int <= 0:
+        erros.append("`Passo de integracao (s)` deve ser maior que zero.")
+    if dt_reg > 0 and dt_int > 0 and dt_reg % dt_int != 0:
+        erros.append(
+            "`Passo de integracao` deve ser divisor exato do `Intervalo de registro da chuva`."
+        )
+    if dt_int > 0 and dt_int not in PASSOS_INTEGRACAO_PERMITIDOS:
+        erros.append(
+            f"`Passo de integracao` deve ser um de: {', '.join(str(x) for x in PASSOS_INTEGRACAO_PERMITIDOS)}."
+        )
     if duracao_min <= 0:
         erros.append("`Duracao da chuva (min)` deve ser maior que zero.")
+    if tempo_recessao_min < 0:
+        erros.append("`Tempo de recessao (min)` nao pode ser negativo.")
+    if dt_int > 0 and tempo_recessao_min > 0:
+        rec_s = float(tempo_recessao_min) * 60.0
+        if abs(rec_s / dt_int - round(rec_s / dt_int)) > 1e-9:
+            erros.append("`Tempo de recessao` deve ser multiplo do passo de integracao.")
+    if dt_reg > 0 and duracao_min > 0:
+        chuva_s = float(duracao_min) * 60.0
+        if abs(chuva_s / dt_reg - round(chuva_s / dt_reg)) > 1e-9:
+            erros.append("`Duracao da chuva` deve ser multipla do intervalo de registro.")
     if n_ac <= 0:
         erros.append("`Numero de ACs` deve ser maior que zero.")
     if exutorio_id <= 0:
@@ -339,10 +467,13 @@ def validar_campos_obrigatorios(
             if col not in us_df.columns or pd.to_numeric(us_df[col], errors="coerce").isna().any():
                 erros.append(f"Preencha todos os valores obrigatorios em US: `{col}`.")
                 break
-    if chuva_df.empty or "P_mm_h" not in chuva_df.columns:
+    col_p = "P_mm" if unidade_chuva == UNIDADE_CHUVA_ACUMULADA and "P_mm" in chuva_df.columns else None
+    if col_p is None:
+        col_p = "P_mm_h" if "P_mm_h" in chuva_df.columns else ("P_mm" if "P_mm" in chuva_df.columns else None)
+    if chuva_df.empty or col_p is None:
         erros.append("Tabela de chuva esta vazia.")
-    elif pd.to_numeric(chuva_df["P_mm_h"], errors="coerce").isna().any():
-        erros.append("Preencha todos os valores de `P_mm_h` na tabela de chuva.")
+    elif pd.to_numeric(chuva_df[col_p], errors="coerce").isna().any():
+        erros.append(f"Preencha todos os valores de `{col_p}` na tabela de chuva.")
     return erros
 
 
@@ -467,20 +598,71 @@ def solve_surface_depth_implicit(
 
 def run_simulation(
     dt: float,
-    chuva_mmh: np.ndarray,
-    ac_df: pd.DataFrame,
-    exutorio_id: int,
-    b_canal: float,
-    s_canal: float,
-    n_canal: float,
-    nivel_base: float,
+    chuva_registros: np.ndarray | None = None,
+    ac_df: pd.DataFrame | None = None,
+    exutorio_id: int = 1,
+    b_canal: float = 1.0,
+    s_canal: float = 0.001,
+    n_canal: float = 0.02,
+    nivel_base: float = 0.0,
+    intervalo_registro_s: float | None = None,
+    unidade_chuva: str = UNIDADE_CHUVA_INTENSIDADE,
+    tempo_recessao_s: float = 0.0,
     usar_horton: bool = False,
     horton_k_h_inv: float = 2.5,
     horton_f0_multiplicador: float = 1.0,
+    chuva_mmh: np.ndarray | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    n_steps = len(chuva_mmh)
-    tempo_s = np.arange(n_steps) * dt
-    chuva_ms = chuva_mmh / 3600000.0
+    """
+    Simula o evento com:
+    - t=0 apenas como condicao inicial (sem avanco do balanco);
+    - intensidade constante dentro de cada intervalo de registro;
+    - registro no fim do intervalo = chuva do intervalo anterior;
+    - passo interno `dt` independente do intervalo de registro;
+    - periodo opcional de recessao com P=0 apos o fim da chuva.
+
+    Compatibilidade: `chuva_mmh` legado e interpretado como intensidade (mm/h).
+    """
+    if ac_df is None:
+        raise ValueError("ac_df e obrigatorio.")
+    if chuva_registros is None:
+        if chuva_mmh is None:
+            raise ValueError("Informe chuva_registros ou chuva_mmh.")
+        chuva_registros = np.asarray(chuva_mmh, dtype=float)
+        unidade_chuva = UNIDADE_CHUVA_INTENSIDADE
+    else:
+        chuva_registros = np.asarray(chuva_registros, dtype=float)
+
+    dt = float(dt)
+    if dt <= 0:
+        raise ValueError("Passo de integracao deve ser maior que zero.")
+    dt_reg = float(intervalo_registro_s if intervalo_registro_s is not None else dt)
+    if dt_reg <= 0:
+        raise ValueError("Intervalo de registro da chuva deve ser maior que zero.")
+    if abs(dt_reg / dt - round(dt_reg / dt)) > 1e-9:
+        raise ValueError("Passo de integracao deve dividir exatamente o intervalo de registro.")
+
+    n_reg = len(chuva_registros)
+    tempo_chuva_s = max(n_reg - 1, 0) * dt_reg
+    tempo_recessao_s = max(float(tempo_recessao_s), 0.0)
+    tempo_total_s = tempo_chuva_s + tempo_recessao_s
+    n_intervals = int(round(tempo_total_s / dt))
+    if abs(n_intervals * dt - tempo_total_s) > 1e-6:
+        n_intervals = int(math.ceil(tempo_total_s / dt - 1e-12))
+    n_steps = n_intervals + 1
+    tempo_s = np.arange(n_steps, dtype=float) * dt
+
+    # Taxa de precipitacao em cada instante de saida (t=0 -> 0; demais = taxa do intervalo que termina em t*dt)
+    chuva_ms = np.zeros(n_steps, dtype=float)
+    for t in range(1, n_steps):
+        chuva_ms[t] = taxa_chuva_no_passo(
+            t_end_s=float(tempo_s[t]),
+            chuva_registros=chuva_registros,
+            intervalo_registro_s=dt_reg,
+            unidade=unidade_chuva,
+            tempo_chuva_s=tempo_chuva_s,
+        )
+    chuva_mmh_eq = chuva_ms * 3600000.0
 
     ac_df = ordenar_ac_topologicamente(ac_df)
     n_ac = len(ac_df)
@@ -494,10 +676,30 @@ def run_simulation(
     infil_real = np.zeros((n_steps, n_ac), dtype=float)
     t_umido_s = np.zeros(n_ac, dtype=float)
 
+    # t = 0: somente condicoes iniciais (sem balanco hidrico)
     for j, row in ac_df.iterrows():
         h[0, j] = max(float(row["h0_m"]), 0.0)
 
-    for t in range(n_steps):
+    for j, row in ac_df.iterrows():
+        area = max(float(row["Area_m2"]), 1e-9)
+        comp = max(float(row["L_m"]), 1e-9)
+        n_eq = max(float(row["n_eq"]), 1e-9)
+        decliv = max(float(row["S_m_m"]), 1e-9)
+        w_eq = area / comp
+        h0 = h[0, j]
+        upstream_ids = parse_upstream_ids(row["ACs_montante_ids"])
+        qin0 = 0.0
+        for up_id in upstream_ids:
+            if up_id in id_to_idx:
+                qin0 += q_out[0, id_to_idx[up_id]]
+        q_in[0, j] = qin0
+        q_unit0 = (1.0 / n_eq) * (h0 ** (5.0 / 3.0)) * math.sqrt(decliv)
+        q_out[0, j] = q_unit0 * w_eq
+        i_excesso[0, j] = 0.0
+        infil_real[0, j] = 0.0
+
+    for t in range(1, n_steps):
+        p_ms = float(chuva_ms[t])
         for j, row in ac_df.iterrows():
             area = max(float(row["Area_m2"]), 1e-9)
             comp = max(float(row["L_m"]), 1e-9)
@@ -506,8 +708,8 @@ def run_simulation(
             decliv = max(float(row["S_m_m"]), 1e-9)
             w_eq = area / comp
 
-            h_prev = h[t, j] if t == 0 else h[t - 1, j]
-            if usar_horton and chuva_mmh[t] > 0:
+            h_prev = h[t - 1, j]
+            if usar_horton and p_ms > 0:
                 t_umido_s[j] += dt
             t_umido_h = t_umido_s[j] / 3600.0
 
@@ -518,10 +720,10 @@ def run_simulation(
                 )
             else:
                 infil_cap_mmh = infil_fc_mmh
-            infil_t_ms = min(chuva_ms[t], infil_cap_mmh / 3600000.0)
+            infil_t_ms = min(p_ms, infil_cap_mmh / 3600000.0)
             infil_real[t, j] = infil_t_ms
 
-            i_eff = max(chuva_ms[t] - infil_t_ms, 0.0)
+            i_eff = max(p_ms - infil_t_ms, 0.0)
             i_excesso[t, j] = i_eff
 
             upstream_ids = parse_upstream_ids(row["ACs_montante_ids"])
@@ -555,7 +757,7 @@ def run_simulation(
         {
             "Passo": np.arange(n_steps),
             "Tempo_s": tempo_s,
-            "P_mm_h": chuva_mmh,
+            "P_mm_h": chuva_mmh_eq,
             "P_m_s": chuva_ms,
             "Q_ex_m3_s": q_ex,
             "Nivel_m": nivel,
@@ -698,6 +900,9 @@ def calibrar_horton_em_grade(
     nivel_base: float,
     k_vals: np.ndarray,
     f0fc_vals: np.ndarray,
+    intervalo_registro_s: float | None = None,
+    unidade_chuva: str = UNIDADE_CHUVA_INTENSIDADE,
+    tempo_recessao_s: float = 0.0,
 ) -> pd.DataFrame:
     if df_obs is None or df_obs.empty:
         return pd.DataFrame()
@@ -709,18 +914,22 @@ def calibrar_horton_em_grade(
     if len(obs_base) < 2:
         return pd.DataFrame()
 
+    dt_reg = float(intervalo_registro_s if intervalo_registro_s is not None else dt_seg)
     registros = []
     for k_h in k_vals:
         for f0fc in f0fc_vals:
             df_saida_k, _ = run_simulation(
                 dt=float(dt_seg),
-                chuva_mmh=chuva_mmh,
+                chuva_registros=chuva_mmh,
                 ac_df=ac_df,
                 exutorio_id=int(exutorio_id),
                 b_canal=float(b_canal),
                 s_canal=float(s_canal),
                 n_canal=float(n_canal),
                 nivel_base=float(nivel_base),
+                intervalo_registro_s=dt_reg,
+                unidade_chuva=unidade_chuva,
+                tempo_recessao_s=float(tempo_recessao_s),
                 usar_horton=True,
                 horton_k_h_inv=float(k_h),
                 horton_f0_multiplicador=float(f0fc),
@@ -878,18 +1087,19 @@ elif pagina == "Instrucoes":
         """
 ### Fluxo recomendado
 
-1. **Configuracao** (barra lateral): defina `Delta t` e a duracao total da chuva em minutos.
+1. **Configuracao** (barra lateral): defina o **intervalo de registro da chuva**, o **passo de integracao** (pode ser menor), a **duracao da chuva**, o **tempo de recessao** (P=0 apos a chuva) e a **unidade** (mm ou mm/h).
 2. **Parametros do canal**: largura, declividade, Manning e nivel de base (cota opcional).
 3. **Areas de contribuicao (AC)**: informe geometria, declividade, montantes (`ACs_montante_ids` com IDs separados por `;`) e lamina inicial `h0_m`.
 4. **Unidades de uso do solo (US)**: preencha areas e parametros por classe. Com a opcao automatica ativada, `Infiltracao_eq_mm_h` e `n_eq` sao calculados por media ponderada pela area da AC.
-5. **Chuva**: edite `P_mm_h` por passo. O passo inicial (`t = 0`) pode ser zero; a chuva efetiva costuma comecar no passo seguinte, conforme seu evento.
+5. **Chuva**: edite a tabela de registros. O instante `t = 0` e apenas condicao inicial (sem chuva no balanco). Cada valor no **fim** de um intervalo representa a precipitacao ocorrida no intervalo anterior. A intensidade e mantida constante dentro do intervalo de registro, mesmo com passo interno menor.
 6. Clique em **Rodar simulacao** e visualize os hidrogramas de nivel e vazao. Baixe os resultados em Excel se desejar.
 7. Aba **Validacao**: informe niveis medidos em campo (grade ou CSV) e compare com a serie simulada (NSE, R2, RMSE, etc.).
 8. Aba **Sugestao de calibracao**: consulte faixas de infiltracao, n na superficie e n do canal antes de preencher a simulacao.
 
 ### Observacoes
 
-- O modelo usa passo de tempo discreto e evento unico de chuva.
+- O intervalo dos registros de precipitacao e independente do passo interno de integracao (ex.: registros a cada 600 s e integracao a 60 s).
+- Simulacoes antigas com coluna `P_mm_h` sao interpretadas como **intensidade em mm/h**.
 - A propagacao superficial usa Manning em plano inclinado; a conversao para nivel no canal usa Manning em secao retangular.
 - Se alterar `Numero de ACs`, recarregue a pagina se necessario para atualizar linhas padrao das US.
         """
@@ -1107,12 +1317,24 @@ elif pagina == "Validacao":
                             for col in ["Area_m2", "L_m", "S_m_m", "h0_m", "Infiltracao_eq_mm_h", "n_eq"]:
                                 ac_cal[col] = pd.to_numeric(ac_cal[col], errors="coerce").astype(float)
 
-                            chuva_cal = (
-                                pd.to_numeric(chuva_loaded["P_mm_h"], errors="coerce").astype(float).to_numpy()
+                            unidade_cal = str(
+                                st.session_state.get("unidade_chuva", UNIDADE_CHUVA_INTENSIDADE)
                             )
+                            chuva_cal = extrair_valores_chuva_df(chuva_loaded, unidade_cal)
+                            dt_int_cal = float(
+                                st.session_state.get(
+                                    "dt_integracao_s", st.session_state.get("dt_seg", 600)
+                                )
+                            )
+                            dt_reg_cal = float(
+                                st.session_state.get(
+                                    "intervalo_registro_s", st.session_state.get("dt_seg", 600)
+                                )
+                            )
+                            rec_cal_s = float(st.session_state.get("tempo_recessao_min", 0.0)) * 60.0
                             df_rank = calibrar_horton_em_grade(
                                 df_obs=df_obs,
-                                dt_seg=float(st.session_state.get("dt_seg", 600)),
+                                dt_seg=dt_int_cal,
                                 chuva_mmh=chuva_cal,
                                 ac_df=ac_cal,
                                 exutorio_id=int(st.session_state.get("exutorio_id", int(ac_cal["ID_AC"].max()))),
@@ -1122,6 +1344,9 @@ elif pagina == "Validacao":
                                 nivel_base=float(st.session_state.get("nivel_base", 0.2)),
                                 k_vals=k_vals,
                                 f0fc_vals=f_vals,
+                                intervalo_registro_s=dt_reg_cal,
+                                unidade_chuva=unidade_cal,
+                                tempo_recessao_s=rec_cal_s,
                             )
                             if df_rank.empty:
                                 st.error("Nao foi possivel calibrar: sem pontos observados suficientes apos alinhamento por Tempo_s.")
@@ -1159,20 +1384,35 @@ elif pagina == "Validacao":
                         ac_ap["ID_AC"] = pd.to_numeric(ac_ap["ID_AC"], errors="coerce").astype(int)
                         for col in ["Area_m2", "L_m", "S_m_m", "h0_m", "Infiltracao_eq_mm_h", "n_eq"]:
                             ac_ap[col] = pd.to_numeric(ac_ap[col], errors="coerce").astype(float)
-                        chuva_ap = (
-                            pd.to_numeric(st.session_state.get("chuva_df_loaded")["P_mm_h"], errors="coerce")
-                            .astype(float)
-                            .to_numpy()
+                        unidade_ap = str(
+                            st.session_state.get("unidade_chuva", UNIDADE_CHUVA_INTENSIDADE)
                         )
+                        chuva_ap = extrair_valores_chuva_df(
+                            st.session_state.get("chuva_df_loaded"), unidade_ap
+                        )
+                        dt_int_ap = float(
+                            st.session_state.get(
+                                "dt_integracao_s", st.session_state.get("dt_seg", 600)
+                            )
+                        )
+                        dt_reg_ap = float(
+                            st.session_state.get(
+                                "intervalo_registro_s", st.session_state.get("dt_seg", 600)
+                            )
+                        )
+                        rec_ap_s = float(st.session_state.get("tempo_recessao_min", 0.0)) * 60.0
                         df_saida_best, _ = run_simulation(
-                            dt=float(st.session_state.get("dt_seg", 600)),
-                            chuva_mmh=chuva_ap,
+                            dt=dt_int_ap,
+                            chuva_registros=chuva_ap,
                             ac_df=ac_ap,
                             exutorio_id=int(st.session_state.get("exutorio_id", int(ac_ap["ID_AC"].max()))),
                             b_canal=float(st.session_state.get("b_canal", 4.0)),
                             s_canal=float(st.session_state.get("s_canal", 0.004)),
                             n_canal=float(st.session_state.get("n_canal", 0.018)),
                             nivel_base=float(st.session_state.get("nivel_base", 0.2)),
+                            intervalo_registro_s=dt_reg_ap,
+                            unidade_chuva=unidade_ap,
+                            tempo_recessao_s=rec_ap_s,
                             usar_horton=True,
                             horton_k_h_inv=float(best["k_h_inv"]),
                             horton_f0_multiplicador=float(best["f0_fc"]),
@@ -1243,7 +1483,11 @@ else:
 
     # Defaults (ou ultimo salvo carregado)
     st.session_state.setdefault("dt_seg", 600)
+    st.session_state.setdefault("intervalo_registro_s", int(st.session_state.get("dt_seg", 600)))
+    st.session_state.setdefault("dt_integracao_s", int(st.session_state.get("dt_seg", 600)))
     st.session_state.setdefault("duracao_min", 40)
+    st.session_state.setdefault("tempo_recessao_min", 0.0)
+    st.session_state.setdefault("unidade_chuva", UNIDADE_CHUVA_INTENSIDADE)
     st.session_state.setdefault("b_canal", 4.0)
     st.session_state.setdefault("s_canal", 0.004)
     st.session_state.setdefault("n_canal", 0.018)
@@ -1267,10 +1511,12 @@ else:
         st.session_state["us_df_loaded"] = pd.DataFrame(
             columns=["ID_AC", "ID_US", "Classe_US", "Area_US_m2", "Infiltracao_US_mm_h", "n_US"]
         )
-        st.session_state["chuva_df_loaded"] = pd.DataFrame(columns=["Passo", "Tempo_s", "P_mm_h"])
+        st.session_state["chuva_df_loaded"] = pd.DataFrame(columns=["Passo", "Tempo_s", "P_mm_h", "P_mm"])
         st.session_state["titulo_salvar"] = ""
         st.session_state["hora_inicio_evento"] = "12:00"
         st.session_state["hora_fim_evento"] = "12:40"
+        st.session_state["tempo_recessao_min"] = 0.0
+        st.session_state["unidade_chuva"] = UNIDADE_CHUVA_INTENSIDADE
         # Limpa estado interno dos widgets antes de renderizar novamente.
         st.session_state.pop("editor_ac", None)
         st.session_state.pop("editor_us", None)
@@ -1284,8 +1530,50 @@ else:
 
     with st.sidebar:
         st.header("Configuracao")
-        dt_seg = st.number_input("Delta t (s)", min_value=60, step=60, key="dt_seg")
-        duracao_min = st.number_input("Duracao da chuva (min)", min_value=10, step=10, key="duracao_min")
+        intervalo_registro_s = st.number_input(
+            "Intervalo de registro da chuva (s)",
+            min_value=5,
+            step=5,
+            key="intervalo_registro_s",
+            help="Espacamento temporal dos registros de precipitacao (ex.: 600 s).",
+        )
+        opcoes_dt = passos_integracao_validos(int(intervalo_registro_s))
+        if not opcoes_dt:
+            st.error(
+                "Nenhum passo de integracao permitido divide o intervalo de registro. "
+                f"Use um intervalo multiplo de: {', '.join(str(x) for x in PASSOS_INTEGRACAO_PERMITIDOS)}."
+            )
+            dt_integracao_s = int(intervalo_registro_s)
+        else:
+            atual_dt = int(st.session_state.get("dt_integracao_s", opcoes_dt[0]))
+            if atual_dt not in opcoes_dt:
+                st.session_state["dt_integracao_s"] = opcoes_dt[0]
+            dt_integracao_s = st.selectbox(
+                "Passo de integracao numerica (s)",
+                options=opcoes_dt,
+                key="dt_integracao_s",
+                help="Passo interno do modelo; deve dividir o intervalo de registro.",
+            )
+        st.session_state["dt_seg"] = int(dt_integracao_s)
+        dt_seg = int(dt_integracao_s)
+
+        duracao_min = st.number_input("Duracao da chuva (min)", min_value=5, step=5, key="duracao_min")
+        tempo_recessao_min = st.number_input(
+            "Tempo de recessao apos a chuva (min)",
+            min_value=0.0,
+            step=5.0,
+            key="tempo_recessao_min",
+            help="Periodo adicional com precipitacao zero para avaliar a recessao.",
+        )
+        unidade_chuva = st.radio(
+            "Unidade da precipitacao",
+            options=[UNIDADE_CHUVA_INTENSIDADE, UNIDADE_CHUVA_ACUMULADA],
+            format_func=lambda u: (
+                "Intensidade (mm/h)" if u == UNIDADE_CHUVA_INTENSIDADE else "Acumulado por intervalo (mm)"
+            ),
+            key="unidade_chuva",
+            horizontal=False,
+        )
         st.divider()
         usar_horton = st.checkbox("Usar infiltracao variavel (Horton)", key="usar_horton")
         if usar_horton:
@@ -1298,8 +1586,18 @@ else:
             st.caption("Modo metodologia: infiltracao constante por US/AC.")
             horton_k_h_inv = float(st.session_state.get("horton_k_h_inv", 2.5))
             horton_f0_multiplicador = float(st.session_state.get("horton_f0_multiplicador", 1.0))
-        n_passos = int(math.ceil((duracao_min * 60) / dt_seg) + 1)
-        st.write(f"Passos ativos: {n_passos} (inclui t=0)")
+
+        n_registros = int(round((duracao_min * 60) / float(intervalo_registro_s))) + 1
+        if abs((n_registros - 1) * float(intervalo_registro_s) - duracao_min * 60) > 1e-6:
+            n_registros = int(math.ceil((duracao_min * 60) / float(intervalo_registro_s))) + 1
+        tempo_chuva_s = (n_registros - 1) * float(intervalo_registro_s)
+        tempo_total_s = tempo_chuva_s + float(tempo_recessao_min) * 60.0
+        n_passos_int = int(round(tempo_total_s / float(dt_integracao_s))) + 1
+        st.write(f"Registros de chuva: {n_registros} (inclui t=0)")
+        st.write(f"Passos de integracao: {n_passos_int} (inclui t=0 como CI)")
+        st.caption(
+            "t=0 = condicoes iniciais. Cada registro no fim do intervalo representa a chuva do intervalo anterior."
+        )
 
     st.subheader("1) Parametros do canal")
     col1, col2, col3, col4 = st.columns(4)
@@ -1422,7 +1720,11 @@ else:
     else:
         ac_preview = ac_df.copy()
 
-    st.subheader("4) Chuva (mm/h)")
+    st.subheader("4) Chuva")
+    st.caption(
+        "Unidade selecionada na barra lateral. O valor no fim de cada intervalo de registro "
+        "representa a precipitacao ocorrida no intervalo anterior. Em t=0 nao ha avanco do balanco."
+    )
     c_t1, c_t2 = st.columns(2)
     hora_inicio_str = c_t1.text_input("Horario de inicio do evento (HH:MM)", key="hora_inicio_evento")
     hora_fim_str = c_t2.text_input("Horario de termino do evento (HH:MM)", key="hora_fim_evento")
@@ -1435,30 +1737,59 @@ else:
         if t_fim < t_ini:
             t_fim = t_fim + timedelta(days=1)
         duracao_horario_min = int((t_fim - t_ini).total_seconds() / 60)
-        duracao_modelo_min = int((n_passos - 1) * dt_seg / 60)
+        duracao_modelo_min = int(tempo_chuva_s / 60)
         if duracao_horario_min != duracao_modelo_min:
             st.warning(
-                f"Duracao por horario ({duracao_horario_min} min) difere da duracao do modelo ({duracao_modelo_min} min). "
-                "O eixo sera discretizado por Delta t a partir do horario de inicio."
+                f"Duracao por horario ({duracao_horario_min} min) difere da duracao da chuva no modelo "
+                f"({duracao_modelo_min} min). O eixo sera discretizado pelo passo de integracao a partir do inicio."
             )
     except Exception:
         horario_ok = False
         st.error("Formato de horario invalido. Use HH:MM, ex.: 12:00.")
 
-    tempo_vec = np.arange(n_passos) * dt_seg
-    default_chuva = np.zeros(n_passos)
-    if n_passos >= 5:
-        default_chuva[1:5] = [18, 42, 25, 8]
-    chuva_df = pd.DataFrame({"Passo": np.arange(n_passos), "Tempo_s": tempo_vec, "P_mm_h": default_chuva})
+    tempo_vec = np.arange(n_registros) * float(intervalo_registro_s)
+    col_chuva = "P_mm" if unidade_chuva == UNIDADE_CHUVA_ACUMULADA else "P_mm_h"
+    default_chuva = np.zeros(n_registros)
+    if n_registros >= 5:
+        if unidade_chuva == UNIDADE_CHUVA_ACUMULADA:
+            # Equivalente volumétrico aos defaults legados em mm/h no intervalo de registro
+            default_chuva[1:5] = np.array([18, 42, 25, 8], dtype=float) * float(intervalo_registro_s) / 3600.0
+        else:
+            default_chuva[1:5] = [18, 42, 25, 8]
+    chuva_df = pd.DataFrame(
+        {"Passo": np.arange(n_registros), "Tempo_s": tempo_vec, col_chuva: default_chuva}
+    )
+    # Evita cache do data_editor com coluna/unidade ou numero de registros desatualizados
+    if st.session_state.get("_editor_chuva_unidade") != unidade_chuva:
+        st.session_state.pop("editor_chuva", None)
+        st.session_state["_editor_chuva_unidade"] = unidade_chuva
+    if st.session_state.get("_editor_chuva_nreg") != n_registros:
+        st.session_state.pop("editor_chuva", None)
+        st.session_state["_editor_chuva_nreg"] = n_registros
+    if st.session_state.get("_editor_chuva_dtreg") != int(intervalo_registro_s):
+        st.session_state.pop("editor_chuva", None)
+        st.session_state["_editor_chuva_dtreg"] = int(intervalo_registro_s)
+
     chuva_loaded = st.session_state.get("chuva_df_loaded")
     if isinstance(chuva_loaded, pd.DataFrame) and not chuva_loaded.empty:
         chuva_loaded = chuva_loaded.copy()
-        if "P_mm_h" in chuva_loaded.columns:
-            chuva_df["P_mm_h"] = np.nan
+        src_col = None
+        if col_chuva in chuva_loaded.columns:
+            src_col = col_chuva
+        elif "P_mm_h" in chuva_loaded.columns:
+            src_col = "P_mm_h"
+        elif "P_mm" in chuva_loaded.columns:
+            src_col = "P_mm"
+        if src_col is not None:
+            chuva_df[col_chuva] = np.nan
             n_copy = min(len(chuva_df), len(chuva_loaded))
-            chuva_df.loc[: n_copy - 1, "P_mm_h"] = pd.to_numeric(
-                chuva_loaded.iloc[:n_copy]["P_mm_h"], errors="coerce"
-            )
+            vals_src = pd.to_numeric(chuva_loaded.iloc[:n_copy][src_col], errors="coerce").to_numpy()
+            # Conversao apenas se a coluna carregada for de outra unidade explicita
+            if src_col != col_chuva and src_col == "P_mm_h" and col_chuva == "P_mm":
+                vals_src = vals_src * float(intervalo_registro_s) / 3600.0
+            elif src_col != col_chuva and src_col == "P_mm" and col_chuva == "P_mm_h":
+                vals_src = vals_src * 3600.0 / max(float(intervalo_registro_s), 1e-12)
+            chuva_df.loc[: n_copy - 1, col_chuva] = vals_src
     chuva_df_edit = st.data_editor(
         chuva_df,
         num_rows="fixed",
@@ -1467,6 +1798,21 @@ else:
         disabled=["Passo", "Tempo_s"],
         key="editor_chuva",
     )
+
+    try:
+        vals_ui = extrair_valores_chuva_df(chuva_df_edit, unidade_chuva)
+        met_p = metricas_precipitacao(vals_ui, unidade_chuva, float(intervalo_registro_s))
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Precipitacao acumulada total (mm)", f"{met_p['P_acum_mm']:.2f}")
+        m2.metric("Intensidade maxima (mm/h)", f"{met_p['I_max_mm_h']:.2f}")
+        m3.metric("Duracao do evento (min)", f"{met_p['Duracao_evento_min']:.1f}")
+        if float(tempo_recessao_min) > 0:
+            st.caption(
+                f"Recessao configurada: {float(tempo_recessao_min):.1f} min com P=0 apos o fim da chuva "
+                f"(horizonte total de simulacao: {tempo_total_s / 60.0:.1f} min)."
+            )
+    except Exception:
+        pass
 
     st.subheader("5) Gestao da simulacao")
     st.text_input("Titulo da simulacao para salvar", key="titulo_salvar", placeholder="Ex.: Evento 12/03/2026")
@@ -1489,6 +1835,10 @@ else:
             ac_df=ac_preview,
             us_df=us_df,
             chuva_df=chuva_df_edit,
+            intervalo_registro_s=int(intervalo_registro_s),
+            dt_integracao_s=int(dt_integracao_s),
+            unidade_chuva=str(unidade_chuva),
+            tempo_recessao_min=float(tempo_recessao_min),
         )
         store = st.session_state.get("sim_store", {"last_id": None, "items": []})
         store["items"] = [x for x in store.get("items", []) if x.get("id") != payload["id"]]
@@ -1521,6 +1871,9 @@ else:
                 ac_df=ac_df,
                 us_df=us_df,
                 chuva_df=chuva_df_edit,
+                intervalo_registro_s=int(intervalo_registro_s),
+                unidade_chuva=str(unidade_chuva),
+                tempo_recessao_min=float(tempo_recessao_min),
             )
             if erros:
                 st.error("A simulacao nao pode rodar. Corrija os campos obrigatorios:")
@@ -1528,21 +1881,24 @@ else:
                     st.markdown(f"- {e}")
                 st.stop()
 
-            chuva_mmh = pd.to_numeric(chuva_df_edit["P_mm_h"], errors="coerce").astype(float).to_numpy()
+            chuva_regs = extrair_valores_chuva_df(chuva_df_edit, str(unidade_chuva))
             ac_df = ac_preview.copy()
             ac_df["ID_AC"] = ac_df["ID_AC"].astype(int)
             for col in ["Area_m2", "L_m", "S_m_m", "h0_m", "Infiltracao_eq_mm_h", "n_eq"]:
                 ac_df[col] = ac_df[col].astype(float)
 
             df_saida, df_ac_detalhe = run_simulation(
-                dt=float(dt_seg),
-                chuva_mmh=chuva_mmh,
+                dt=float(dt_integracao_s),
+                chuva_registros=chuva_regs,
                 ac_df=ac_df,
                 exutorio_id=int(exutorio_id),
                 b_canal=float(b_canal),
                 s_canal=float(s_canal),
                 n_canal=float(n_canal),
                 nivel_base=float(nivel_base),
+                intervalo_registro_s=float(intervalo_registro_s),
+                unidade_chuva=str(unidade_chuva),
+                tempo_recessao_s=float(tempo_recessao_min) * 60.0,
                 usar_horton=bool(usar_horton),
                 horton_k_h_inv=float(horton_k_h_inv),
                 horton_f0_multiplicador=float(horton_f0_multiplicador),
@@ -1557,7 +1913,15 @@ else:
             st.session_state["chuva_df_loaded"] = chuva_df_edit.copy()
 
             st.success("Simulacao concluida.")
-            tempo_hhmm = montar_tempo_evento_hhmm(len(df_saida), int(dt_seg), hora_inicio_str)
+            met_run = metricas_precipitacao(
+                chuva_regs, str(unidade_chuva), float(intervalo_registro_s)
+            )
+            r1, r2, r3 = st.columns(3)
+            r1.metric("Precipitacao acumulada total (mm)", f"{met_run['P_acum_mm']:.2f}")
+            r2.metric("Intensidade maxima (mm/h)", f"{met_run['I_max_mm_h']:.2f}")
+            r3.metric("Duracao do evento (min)", f"{met_run['Duracao_evento_min']:.1f}")
+
+            tempo_hhmm = montar_tempo_evento_hhmm(len(df_saida), int(dt_integracao_s), hora_inicio_str)
             df_saida = df_saida.copy()
             df_saida["Tempo_hhmm"] = tempo_hhmm
             c1, c2, c3 = st.columns(3)
