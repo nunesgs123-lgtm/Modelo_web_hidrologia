@@ -1,0 +1,6 @@
+# Configuracao opcional para deploy (Streamlit Cloud, etc.)
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false

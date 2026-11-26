@@ -1,37 +1,44 @@
-# Modelo Hidrologico Urbano (Web Local)
+# Modelo Hidrológico Urbano (Web Local)
 
-Aplicacao web local em `Streamlit` para simular:
-- geracao e propagacao do escoamento superficial por AC;
-- vazao no exutorio;
-- conversao de vazao para nivel no canal (Manning, secao retangular).
+Aplicação web local em `Streamlit` para simular:
+- geração e propagação do escoamento superficial por AC;
+- vazão no exutório;
+- conversão de vazão para nível no canal (Manning, seção retangular).
+
+Versões: **MHU 1.1** (Modo 1, parâmetros equivalentes — preservado) e **MHU 2.0** experimental
+(Modo 2, processamento por classe de uso do solo). Ver `MHU_2.0_CONCEPCAO.md`.
 
 ## Como executar
 
 1. Abra terminal na pasta do projeto:
    - `C:\Users\obser\OneDrive\Documentos\Gabriel\ESTAGIO\PESQUISA\modelo_web_hidrologia`
-2. Instale dependencias:
+2. Instale dependências:
    - `pip install -r requirements.txt`
-3. Rode a aplicacao:
+3. Rode a aplicação:
    - `streamlit run app.py`
 
-## Navegacao
+## Navegação
 
 Na barra lateral use o **Menu** para alternar entre:
 
-- **Simulacao** — formularios e resultados
-- **Instrucoes** — passo a passo de uso
-- **Descricao das variaveis** — glossario dos termos
-- **Validacao** — niveis observados vs simulados (NSE/Nash, R2, RMSE, MAE)
-- **Sugestao de calibracao** — faixas de infiltracao e Manning (US) e n do canal
+- **Simulação** — formulários e resultados (escolha Modo 1 ou Modo 2)
+- **Balanço Hídrico** — fechamento numérico de massa
+- **Comparação MHU 1.1 × 2.0** — mesmos dados nos dois modos
+- **Instruções** — passo a passo de uso
+- **Descrição das variáveis** — glossário dos termos
+- **Validação** — níveis observados vs simulados (NSE/Nash, R², RMSE, MAE)
+- **Sugestão de calibração** — faixas de infiltração e Manning (US) e n do canal
 
-## Uso rapido
+## Uso rápido
 
-1. Configure `Delta t` e `Duracao da chuva`.
-2. Informe parametros do canal.
-3. Edite a tabela de ACs (incluindo `ACs_montante_ids`, ex.: `1;2`).
-4. Edite a serie de chuva em `P_mm_h` (o passo `t=0` pode ficar 0).
-5. Clique em **Rodar simulacao**.
-6. Visualize hidrogramas e baixe resultados em Excel.
+1. Escolha a formulação (Modo 1 = MHU 1.1 ou Modo 2 = MHU 2.0).
+2. Configure intervalo de registro, passo de integração e duração da chuva.
+3. Informe parâmetros do canal.
+4. Edite a tabela de ACs (incluindo `ACs_montante_ids`, ex.: `1;2`).
+5. Edite as US; no Modo 2 a soma das áreas deve fechar com a AC.
+6. Edite a série de chuva (o passo `t=0` é só condição inicial).
+7. Clique em **Rodar simulação**.
+8. Visualize hidrogramas (e detalhe por US no Modo 2) e baixe o Excel.
 
 ## Publicar na internet (link publico, sem PowerShell)
 

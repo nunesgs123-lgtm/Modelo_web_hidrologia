@@ -73,6 +73,32 @@ GLOSSARIO_ROWS = [
     {"Termo": "NSE / Nash-Sutcliffe", "Unidade": "-", "Descricao": "Eficiência de Nash-Sutcliffe: 1 - sum((O-S)^2)/sum((O-mean(O))^2). Também chamado de Nash."},
     {"Termo": "R2 (Pearson)", "Unidade": "-", "Descricao": "Coeficiente de determinação linear: quadrado da correlacao de Pearson entre observado e simulado."},
     {"Termo": "RMSE / MAE / Vies", "Unidade": "m", "Descricao": "Erro quadrático médio, erro absoluto médio e viés médio (S - O) para nível."},
+    {
+        "Termo": "Modo_MHU_1.1",
+        "Unidade": "-",
+        "Descricao": (
+            "Parâmetros equivalentes por AC (média ponderada por área das US). "
+            "Formulação do MHU 1.1 preservada."
+        ),
+    },
+    {
+        "Termo": "Modo_MHU_2.0",
+        "Unidade": "-",
+        "Descricao": (
+            "Processamento hidrológico individual por classe US (V, h, n, f, Q próprios). "
+            "Mudança de concepção matemática — não é apenas correção de código. "
+            "Q_i = Σ Q_ij; W_ij = A_ij/L_i; Q_ij = (W_ij/n_ij)·h_ij^(5/3)·√S_i."
+        ),
+    },
+    {
+        "Termo": "Estrategia_montante",
+        "Unidade": "-",
+        "Descricao": (
+            "Como Q_in da AC é repartida entre classes no Modo 2. "
+            "Hipótese experimental atual: proporcional_area (mistura homogênea). "
+            "Interface preparada para outras estratégias."
+        ),
+    },
 ]
 
 PASSOS_INTEGRACAO_PERMITIDOS = [600, 300, 120, 60, 30, 10, 5]
@@ -80,6 +106,8 @@ UNIDADE_CHUVA_INTENSIDADE = "mm/h"
 UNIDADE_CHUVA_ACUMULADA = "mm"
 # Tolerancia de fechamento NUMERICO do balanco hidrico (nao e validacao fisica).
 TOL_BALANCO_HIDRICO_M3_DEFAULT = 1e-6
+MODO_MHU_1_1 = "MHU_1.1_equivalente"
+MODO_MHU_2_0 = "MHU_2.0_por_classe"
 
 # Referencias para calibracao (ordens de grandeza; ajustar ao local e ao evento)
 CALIBRACAO_USO_SOLO = [
@@ -355,6 +383,7 @@ def gerar_payload_simulacao(
     dt_integracao_s: int | None = None,
     unidade_chuva: str = UNIDADE_CHUVA_INTENSIDADE,
     tempo_recessao_min: float = 0.0,
+    modo_mhu: str = MODO_MHU_1_1,
 ) -> dict:
     start_hhmm = st.session_state.get("hora_inicio_evento", "12:00")
     end_hhmm = st.session_state.get("hora_fim_evento", "12:40")
@@ -382,6 +411,7 @@ def gerar_payload_simulacao(
             "horton_k_h_inv": float(horton_k_h_inv),
             "horton_f0_multiplicador": float(horton_f0_multiplicador),
             "usar_us_para_eq": bool(usar_us_para_eq),
+            "modo_mhu": str(modo_mhu),
             "hora_inicio_evento": str(start_hhmm),
             "hora_fim_evento": str(end_hhmm),
         },
@@ -411,6 +441,7 @@ def aplicar_payload_em_session(payload: dict) -> None:
     st.session_state["horton_k_h_inv"] = float(p.get("horton_k_h_inv", 2.5))
     st.session_state["horton_f0_multiplicador"] = float(p.get("horton_f0_multiplicador", 1.0))
     st.session_state["usar_us_para_eq"] = bool(p.get("usar_us_para_eq", True))
+    st.session_state["modo_mhu"] = str(p.get("modo_mhu", MODO_MHU_1_1))
     st.session_state["hora_inicio_evento"] = str(p.get("hora_inicio_evento", "12:00"))
     st.session_state["hora_fim_evento"] = str(p.get("hora_fim_evento", "12:40"))
     st.session_state["ac_df_loaded"] = pd.DataFrame(payload.get("ac_df", []))
@@ -1425,7 +1456,162 @@ def run_simulation(
         )
         registros.append(df_ac)
     df_ac_detalhe = pd.concat(registros, ignore_index=True)
+    df_saida = df_saida.copy()
+    df_saida["Modo_hidrologico"] = MODO_MHU_1_1
+    df_ac_detalhe = df_ac_detalhe.copy()
+    df_ac_detalhe["Modo_hidrologico"] = MODO_MHU_1_1
     return df_saida, df_ac_detalhe
+
+
+def executar_simulacao_mhu(
+    *,
+    modo: str,
+    dt: float,
+    chuva_registros: np.ndarray,
+    ac_df: pd.DataFrame,
+    us_df: pd.DataFrame | None = None,
+    exutorio_id: int,
+    b_canal: float,
+    s_canal: float,
+    n_canal: float,
+    nivel_base: float,
+    intervalo_registro_s: float | None = None,
+    unidade_chuva: str = UNIDADE_CHUVA_INTENSIDADE,
+    tempo_recessao_s: float = 0.0,
+    usar_horton: bool = False,
+    horton_k_h_inv: float = 2.5,
+    horton_f0_multiplicador: float = 1.0,
+    estrategia_montante: str = "proporcional_area",
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame | None]:
+    """
+    Despacha MHU 1.1 (equivalente) ou MHU 2.0 (por classe US).
+    Retorna (df_saida, df_ac_detalhe, df_us_detalhe|None).
+    """
+    if modo == MODO_MHU_2_0:
+        if us_df is None or us_df.empty:
+            raise ValueError("O Modo MHU 2.0 exige tabela de unidades de uso do solo (US).")
+        from mhu_modo2 import run_simulation_por_classe
+
+        return run_simulation_por_classe(
+            dt=dt,
+            chuva_registros=chuva_registros,
+            ac_df=ac_df,
+            us_df=us_df,
+            exutorio_id=exutorio_id,
+            b_canal=b_canal,
+            s_canal=s_canal,
+            n_canal=n_canal,
+            nivel_base=nivel_base,
+            intervalo_registro_s=intervalo_registro_s,
+            unidade_chuva=unidade_chuva,
+            tempo_recessao_s=tempo_recessao_s,
+            usar_horton=usar_horton,
+            horton_k_h_inv=horton_k_h_inv,
+            horton_f0_multiplicador=horton_f0_multiplicador,
+            estrategia_montante=estrategia_montante,
+            validar_e_preparar_rede_ac=validar_e_preparar_rede_ac,
+            taxa_chuva_no_passo=taxa_chuva_no_passo,
+            solve_surface_storage_implicit=solve_surface_storage_implicit,
+            manning_vazao_superficie=manning_vazao_superficie,
+            solve_channel_depth=solve_channel_depth,
+            UNIDADE_CHUVA_INTENSIDADE=UNIDADE_CHUVA_INTENSIDADE,
+        )
+
+    df_s, df_ac = run_simulation(
+        dt=dt,
+        chuva_registros=chuva_registros,
+        ac_df=ac_df,
+        exutorio_id=exutorio_id,
+        b_canal=b_canal,
+        s_canal=s_canal,
+        n_canal=n_canal,
+        nivel_base=nivel_base,
+        intervalo_registro_s=intervalo_registro_s,
+        unidade_chuva=unidade_chuva,
+        tempo_recessao_s=tempo_recessao_s,
+        usar_horton=usar_horton,
+        horton_k_h_inv=horton_k_h_inv,
+        horton_f0_multiplicador=horton_f0_multiplicador,
+    )
+    return df_s, df_ac, None
+
+
+def comparar_mhu_1_1_e_2_0(
+    *,
+    dt: float,
+    chuva_registros: np.ndarray,
+    ac_df: pd.DataFrame,
+    us_df: pd.DataFrame,
+    exutorio_id: int,
+    b_canal: float,
+    s_canal: float,
+    n_canal: float,
+    nivel_base: float,
+    intervalo_registro_s: float,
+    unidade_chuva: str,
+    tempo_recessao_s: float,
+    usar_horton: bool,
+    horton_k_h_inv: float,
+    horton_f0_multiplicador: float,
+) -> dict:
+    """Executa ambos os modos com os mesmos dados e resume diferenças."""
+    kwargs = dict(
+        dt=dt,
+        chuva_registros=chuva_registros,
+        ac_df=ac_df,
+        us_df=us_df,
+        exutorio_id=exutorio_id,
+        b_canal=b_canal,
+        s_canal=s_canal,
+        n_canal=n_canal,
+        nivel_base=nivel_base,
+        intervalo_registro_s=intervalo_registro_s,
+        unidade_chuva=unidade_chuva,
+        tempo_recessao_s=tempo_recessao_s,
+        usar_horton=usar_horton,
+        horton_k_h_inv=horton_k_h_inv,
+        horton_f0_multiplicador=horton_f0_multiplicador,
+    )
+    s1, ac1, _ = executar_simulacao_mhu(modo=MODO_MHU_1_1, **kwargs)
+    s2, ac2, us2 = executar_simulacao_mhu(modo=MODO_MHU_2_0, **kwargs)
+    cmp = pd.DataFrame(
+        [
+            {
+                "Indicador": "Q_pico_m3_s",
+                "MHU_1.1": float(s1["Q_ex_m3_s"].max()),
+                "MHU_2.0": float(s2["Q_ex_m3_s"].max()),
+            },
+            {
+                "Indicador": "Nivel_pico_m",
+                "MHU_1.1": float(s1["Nivel_m"].max()),
+                "MHU_2.0": float(s2["Nivel_m"].max()),
+            },
+            {
+                "Indicador": "Volume_exutorio_m3",
+                "MHU_1.1": float((s1["Q_ex_m3_s"].iloc[1:] * dt).sum()) if len(s1) > 1 else 0.0,
+                "MHU_2.0": float((s2["Q_ex_m3_s"].iloc[1:] * dt).sum()) if len(s2) > 1 else 0.0,
+            },
+            {
+                "Indicador": "Volume_infiltrado_total_m3",
+                "MHU_1.1": float(ac1.loc[ac1["Passo"] > 0, "Volume_infiltrado_m3"].sum()),
+                "MHU_2.0": float(ac2.loc[ac2["Passo"] > 0, "Volume_infiltrado_m3"].sum()),
+            },
+        ]
+    )
+    cmp["Diferenca"] = cmp["MHU_2.0"] - cmp["MHU_1.1"]
+    cmp["Diferenca_pct"] = np.where(
+        np.abs(cmp["MHU_1.1"]) > 1e-15,
+        100.0 * cmp["Diferenca"] / cmp["MHU_1.1"],
+        np.nan,
+    )
+    return {
+        "resumo": cmp,
+        "df_saida_1_1": s1,
+        "df_saida_2_0": s2,
+        "df_ac_1_1": ac1,
+        "df_ac_2_0": ac2,
+        "df_us_2_0": us2,
+    }
 
 
 def diagnosticar_balanco_hidrico(
@@ -1767,12 +1953,18 @@ def montar_excel_resultados(
     df_saida: pd.DataFrame,
     df_ac_detalhe: pd.DataFrame,
     balanco: dict | None = None,
+    df_us_detalhe: pd.DataFrame | None = None,
+    df_comparacao: pd.DataFrame | None = None,
 ) -> bytes:
     """Empacota saidas da simulacao e do diagnostico de balanco em Excel."""
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df_saida.to_excel(writer, index=False, sheet_name="Exutorio")
         df_ac_detalhe.to_excel(writer, index=False, sheet_name="Detalhe_AC")
+        if df_us_detalhe is not None and not df_us_detalhe.empty:
+            df_us_detalhe.to_excel(writer, index=False, sheet_name="Detalhe_US")
+        if df_comparacao is not None and not df_comparacao.empty:
+            df_comparacao.to_excel(writer, index=False, sheet_name="Comparacao_1_1_x_2_0")
         if balanco is not None:
             balanco["df_passos"].to_excel(writer, index=False, sheet_name="Balanco_passos")
             balanco["df_resumo_ac"].to_excel(writer, index=False, sheet_name="Balanco_AC")
@@ -2029,6 +2221,7 @@ with st.sidebar:
             "Simulação",
             "Simulações salvas",
             "Balanço Hídrico",
+            "Comparação MHU 1.1 × 2.0",
             "Validação",
             "Sugestão de calibração",
             "Instruções",
@@ -2193,6 +2386,134 @@ if pagina == "Balanço Hídrico":
         except Exception as exc_bal:
             st.error(f"Erro no diagnóstico de balanço: {exc_bal}")
 
+elif pagina == "Comparação MHU 1.1 × 2.0":
+    st.title("Comparação MHU 1.1 × MHU 2.0")
+    st.markdown(
+        """
+O **MHU 2.0 (Modo 2)** processa cada classe de uso do solo com armazenamento, infiltração e
+vazão próprios. Isso é uma **mudança de concepção matemática**, não uma correção de programação
+do MHU 1.1 (parâmetros equivalentes por AC).
+
+Ambos os modos usam os **mesmos dados de entrada** (AC, US, chuva, canal, Δt). A distribuição
+da vazão de montante entre classes no Modo 2 segue a hipótese experimental de **mistura homogênea**
+(proporcional à área).
+        """
+    )
+    ac_ref = st.session_state.get("ac_df_loaded")
+    us_ref = st.session_state.get("us_df_loaded")
+    chuva_ref = st.session_state.get("chuva_df_loaded")
+    meta = st.session_state.get("sim_meta_balanco")
+    if (
+        not isinstance(ac_ref, pd.DataFrame)
+        or ac_ref.empty
+        or not isinstance(us_ref, pd.DataFrame)
+        or us_ref.empty
+        or not isinstance(chuva_ref, pd.DataFrame)
+        or chuva_ref.empty
+        or meta is None
+    ):
+        st.warning(
+            "Carregue ou rode uma simulação na aba **Simulação** (com tabela US preenchida) "
+            "para habilitar a comparação com os mesmos dados de entrada."
+        )
+    else:
+        from mhu_modo2 import verificar_consistencia_areas_us, normalizar_areas_us_proporcional
+
+        df_areas = verificar_consistencia_areas_us(ac_ref, us_ref)
+        st.subheader("Consistência de áreas (AC × soma das US)")
+        st.dataframe(df_areas, use_container_width=True, hide_index=True)
+        inconsistentes = df_areas[~df_areas["Consistente"]]
+        us_cmp = us_ref.copy()
+        if not inconsistentes.empty:
+            st.error(
+                "Há diferença entre a área da AC e a soma das áreas das classes US. "
+                "Erro absoluto e percentual estão na tabela acima. Corrija as áreas ou autorize "
+                "a normalização proporcional (não é feita silenciosamente)."
+            )
+            autorizar = st.checkbox(
+                "Autorizo normalização proporcional das áreas US para a comparação",
+                key="cmp_autorizar_norm_areas",
+            )
+            if autorizar:
+                us_cmp = normalizar_areas_us_proporcional(ac_ref, us_ref)
+                st.info("Áreas US normalizadas proporcionalmente para esta comparação.")
+            else:
+                st.stop()
+
+        if st.button("Executar comparação 1.1 × 2.0", type="primary", key="btn_comparar_mhu"):
+            try:
+                unidade = str(meta.get("unidade_chuva", st.session_state.get("unidade_chuva", UNIDADE_CHUVA_INTENSIDADE)))
+                chuva_regs = extrair_valores_chuva_df(chuva_ref, unidade)
+                ac_m1 = ac_ref.copy()
+                if bool(st.session_state.get("usar_us_para_eq", True)):
+                    ac_m1 = calcular_parametros_equivalentes_por_us(ac_m1, us_cmp)
+                resultado = comparar_mhu_1_1_e_2_0(
+                    dt=float(meta["dt"]),
+                    chuva_registros=chuva_regs,
+                    ac_df=ac_m1,
+                    us_df=us_cmp,
+                    exutorio_id=int(meta["exutorio_id"]),
+                    b_canal=float(st.session_state.get("b_canal", 4.0)),
+                    s_canal=float(st.session_state.get("s_canal", 0.004)),
+                    n_canal=float(st.session_state.get("n_canal", 0.018)),
+                    nivel_base=float(st.session_state.get("nivel_base", 0.2)),
+                    intervalo_registro_s=float(meta.get("intervalo_registro_s", meta["dt"])),
+                    unidade_chuva=unidade,
+                    tempo_recessao_s=float(meta.get("tempo_recessao_s", 0.0)),
+                    usar_horton=bool(st.session_state.get("usar_horton", False)),
+                    horton_k_h_inv=float(st.session_state.get("horton_k_h_inv", 2.5)),
+                    horton_f0_multiplicador=float(st.session_state.get("horton_f0_multiplicador", 1.0)),
+                )
+                st.session_state["cmp_mhu"] = resultado
+                st.success("Comparação concluída.")
+            except Exception as exc_cmp:
+                st.error(f"Erro na comparação: {exc_cmp}")
+
+        cmp_store = st.session_state.get("cmp_mhu")
+        if isinstance(cmp_store, dict) and "resumo" in cmp_store:
+            st.subheader("Resumo de indicadores")
+            st.dataframe(cmp_store["resumo"], use_container_width=True, hide_index=True)
+            s1 = cmp_store["df_saida_1_1"].copy()
+            s2 = cmp_store["df_saida_2_0"].copy()
+            fig_cmp = go.Figure()
+            fig_cmp.add_trace(
+                go.Scatter(x=s1["Tempo_s"], y=s1["Q_ex_m3_s"], name="Q_ex MHU 1.1", mode="lines")
+            )
+            fig_cmp.add_trace(
+                go.Scatter(x=s2["Tempo_s"], y=s2["Q_ex_m3_s"], name="Q_ex MHU 2.0", mode="lines")
+            )
+            fig_cmp.update_layout(
+                title="Hidrograma no exutório — mesmos dados de entrada",
+                xaxis_title="Tempo (s)",
+                yaxis_title="Vazão (m³/s)",
+            )
+            st.plotly_chart(fig_cmp, use_container_width=True)
+            fig_n = go.Figure()
+            fig_n.add_trace(
+                go.Scatter(x=s1["Tempo_s"], y=s1["Nivel_m"], name="Nível MHU 1.1", mode="lines")
+            )
+            fig_n.add_trace(
+                go.Scatter(x=s2["Tempo_s"], y=s2["Nivel_m"], name="Nível MHU 2.0", mode="lines")
+            )
+            fig_n.update_layout(
+                title="Nível no canal — MHU 1.1 × 2.0",
+                xaxis_title="Tempo (s)",
+                yaxis_title="Nível (m)",
+            )
+            st.plotly_chart(fig_n, use_container_width=True)
+            st.download_button(
+                "Baixar Excel da comparação",
+                data=montar_excel_resultados(
+                    cmp_store["df_saida_2_0"],
+                    cmp_store["df_ac_2_0"],
+                    df_us_detalhe=cmp_store.get("df_us_2_0"),
+                    df_comparacao=cmp_store["resumo"],
+                ),
+                file_name="comparacao_mhu_1_1_x_2_0.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_cmp_mhu",
+            )
+
 elif pagina == "Sugestão de calibração":
     st.title("Sugestão de calibração")
     st.caption(
@@ -2256,24 +2577,26 @@ elif pagina == "Instruções":
         """
 ### Fluxo recomendado
 
-1. **Configuração** (barra lateral): defina o **intervalo de registro da chuva**, o **passo de integração** (pode ser menor), a **duração da chuva**, o **tempo de recessão** (P=0 após a chuva) e a **unidade** (mm ou mm/h).
+1. **Configuração** (barra lateral): escolha o **modo hidrológico** (MHU 1.1 equivalente ou MHU 2.0 por classe), o **intervalo de registro da chuva**, o **passo de integração**, a **duração da chuva**, o **tempo de recessão** e a **unidade** (mm ou mm/h).
 2. **Parâmetros do canal**: largura, declividade, Manning e nível de base (cota opcional).
 3. **Áreas de contribuição (AC)**: informe geometria, declividade, montantes (`ACs_montante_ids` com IDs separados por `;`) e lâmina inicial `h0_m`. A rede deve ser **convergente**: cada AC (exceto o exutório) tem um único destino a jusante; o grafo interativo ajuda a conferir.
-4. **Unidades de uso do solo (US)**: preencha áreas e parâmetros por classe. Com a opção automática ativada, `Infiltracao_eq_mm_h` e `n_eq` são calculados por média ponderada pela área da AC.
-5. **Chuva**: edite a tabela de registros. O instante `t = 0` é apenas condição inicial (sem chuva no balanço). Cada valor no **fim** de um intervalo representa a precipitação ocorrida no intervalo anterior. A intensidade é mantida constante dentro do intervalo de registro, mesmo com passo interno menor.
-6. Clique em **Rodar simulação** e visualize os hidrogramas de nível e vazão. Baixe os resultados em Excel se desejar.
-7. Aba **Balanço Hídrico**: diagnóstico de fechamento numérico de massa (por AC e bacia; chuva vs recessão). Tolerância configurável; não substitui a validação física.
-8. Aba **Validação**: informe níveis medidos em campo (grade ou CSV) e compare com a série simulada (NSE, R², RMSE, etc.).
-9. Aba **Sugestão de calibração**: consulte faixas de infiltração, n na superfície e n do canal antes de preencher a simulação.
+4. **Unidades de uso do solo (US)**: preencha áreas e parâmetros por classe.
+   - **Modo 1 (MHU 1.1)**: com a opção automática, `Infiltracao_eq_mm_h` e `n_eq` são médias ponderadas pela área.
+   - **Modo 2 (MHU 2.0)**: cada classe evolui com A, n, f, V, h e Q próprios; a vazão da AC é Σ Q_ij. Não se calcula média de Manning. A soma das áreas das classes deve fechar com a área da AC (diferenças exigem correção ou autorização explícita de normalização).
+5. **Chuva**: edite a tabela de registros. O instante `t = 0` é apenas condição inicial. Cada valor no **fim** de um intervalo representa a precipitação do intervalo anterior.
+6. Clique em **Rodar simulação**. No Modo 2, visualize também resultados por classe US.
+7. Aba **Comparação MHU 1.1 × 2.0**: rode ambos os modos com os mesmos dados e compare hidrogramas/indicadores.
+8. Aba **Balanço Hídrico**: fechamento numérico de massa (não é validação física).
+9. Aba **Validação** / **Sugestão de calibração**: níveis observados e faixas de parâmetros.
 
 ### Observações
 
-- O intervalo dos registros de precipitação é independente do passo interno de integração (ex.: registros a cada 600 s e integração a 60 s).
+- O **MHU 2.0** é experimental e representa **mudança de concepção matemática**, não apenas correção de código.
+- No Modo 2, a vazão de montante entre classes usa hipótese experimental de **mistura homogênea** (proporcional à área), com código preparado para outras estratégias.
+- O intervalo dos registros de precipitação é independente do passo interno de integração.
 - Simulações antigas com coluna `P_mm_h` são interpretadas como **intensidade em mm/h**.
-- A infiltração usa balanço volumétrico (lâmina + chuva + montante); a água armazenada pode infiltrar após o fim da chuva. Opções: capacidade constante ou Horton.
-- A propagação superficial usa Euler implícito volumétrico com Manning em plano inclinado (`V + dt·Q(V) = V_disp`, bisseção); a conversão para nível no canal usa Manning em seção retangular.
-- A transferência entre ACs **no mesmo passo interno** é uma **aproximação numérica de reservatórios conectados** (ordenação montante→jusante), **não** uma simulação hidráulica explícita dos canais de ligação.
-- Se alterar `Número de ACs`, recarregue a página se necessário para atualizar linhas padrão das US.
+- Infiltração volumétrica + Euler implícito + rede convergente preservados em ambos os modos.
+- Snapshot congelado do MHU 1.1 em `snapshots/MHU_1.1/`.
         """
     )
 
@@ -2651,7 +2974,9 @@ elif pagina == "Validação":
 
 else:
     st.title("Modelo Hidrológico Urbano - Escoamento e Nível no Canal")
-    st.caption("Versão web local para simulação de evento único de chuva-vazão.")
+    st.caption(
+        "MHU 1.1 preservado (Modo 1) · MHU 2.0 experimental (Modo 2, por classe de uso do solo)."
+    )
 
     # Defaults (ou ultimo salvo carregado)
     st.session_state.setdefault("dt_seg", 600)
@@ -2670,11 +2995,13 @@ else:
     st.session_state.setdefault("n_ac", 3)
     st.session_state.setdefault("exutorio_id", 3)
     st.session_state.setdefault("usar_us_para_eq", True)
+    st.session_state.setdefault("modo_mhu", MODO_MHU_1_1)
     st.session_state.setdefault("titulo_salvar", "")
     st.session_state.setdefault("hora_inicio_evento", "12:00")
     st.session_state.setdefault("hora_fim_evento", "12:40")
     st.session_state.setdefault("_clear_sim_requested", False)
     st.session_state.setdefault("_show_clear_notice", False)
+    st.session_state.setdefault("autorizar_norm_areas_us", False)
 
     if st.session_state.get("_clear_sim_requested"):
         st.session_state["ac_df_loaded"] = pd.DataFrame(
@@ -2702,6 +3029,25 @@ else:
 
     with st.sidebar:
         st.header("Configuração")
+        modo_mhu = st.radio(
+            "Formulação hidrológica",
+            options=[MODO_MHU_1_1, MODO_MHU_2_0],
+            format_func=lambda m: (
+                "Modo 1 — MHU 1.1 (parâmetros equivalentes por AC)"
+                if m == MODO_MHU_1_1
+                else "Modo 2 — MHU 2.0 (processamento por classe US)"
+            ),
+            key="modo_mhu",
+            help=(
+                "Modo 1 preserva o MHU 1.1. Modo 2 é experimental: cada classe US tem "
+                "armazenamento, infiltração e vazão próprios (mudança de concepção matemática)."
+            ),
+        )
+        if modo_mhu == MODO_MHU_2_0:
+            st.caption(
+                "MHU 2.0: Q_i = Σ Q_ij · W_ij = A_ij/L_i · hipótese experimental de mistura "
+                "homogênea para Q de montante (proporcional à área)."
+            )
         intervalo_registro_s = st.number_input(
             "Intervalo de registro da chuva (s)",
             min_value=5,
@@ -2840,10 +3186,18 @@ else:
         st.error(str(exc_rede))
 
     st.subheader("3) Unidades de uso do solo (US) - editável")
-    usar_us_para_eq = st.checkbox(
-        "Calcular Infiltracao_eq_mm_h e n_eq automaticamente a partir das US",
-        key="usar_us_para_eq",
-    )
+    if modo_mhu == MODO_MHU_1_1:
+        usar_us_para_eq = st.checkbox(
+            "Calcular Infiltracao_eq_mm_h e n_eq automaticamente a partir das US",
+            key="usar_us_para_eq",
+        )
+    else:
+        usar_us_para_eq = False
+        st.info(
+            "Modo 2 (MHU 2.0): cada classe US tem área, Manning, infiltração, armazenamento, "
+            "lâmina e vazão próprios. **Não** se calcula média aritmética de Manning. "
+            "A vazão da AC é a soma das vazões das classes."
+        )
     classes_padrao = ["Superfície impermeável", "Gramado", "Vegetação arbórea"]
     rows_us = []
     for ac_id in range(1, int(n_ac) + 1):
@@ -2879,9 +3233,42 @@ else:
         key="editor_us",
     )
 
-    if usar_us_para_eq:
-        ac_preview = calcular_parametros_equivalentes_por_us(ac_df, us_df)
-        st.caption("Parâmetros equivalentes calculados por US (ponderados pela área da AC).")
+    from mhu_modo2 import verificar_consistencia_areas_us, normalizar_areas_us_proporcional
+
+    df_areas_check = verificar_consistencia_areas_us(ac_df, us_df)
+    st.subheader("Consistência de áreas (AC × soma das US)")
+    st.dataframe(df_areas_check, use_container_width=True, hide_index=True)
+    areas_ok = bool(df_areas_check["Consistente"].all()) if not df_areas_check.empty else False
+    us_df_run = us_df.copy()
+    if areas_ok:
+        st.success("Soma das áreas das classes US coincide com a área de cada AC.")
+    elif modo_mhu == MODO_MHU_2_0:
+        st.error(
+            "Diferença entre área da AC e soma das classes US. "
+            "No Modo 2, corrija as áreas ou autorize explicitamente a normalização proporcional. "
+            "Não há normalização silenciosa."
+        )
+        autorizar_norm = st.checkbox(
+            "Autorizo normalização proporcional das áreas US à área da AC",
+            key="autorizar_norm_areas_us",
+        )
+        if autorizar_norm:
+            us_df_run = normalizar_areas_us_proporcional(ac_df, us_df)
+            st.warning("Áreas US serão normalizadas proporcionalmente nesta execução.")
+            st.dataframe(
+                verificar_consistencia_areas_us(ac_df, us_df_run),
+                use_container_width=True,
+                hide_index=True,
+            )
+    else:
+        st.warning(
+            "Há diferença entre área da AC e soma das US (ver erros abs./%). "
+            "No Modo 1 isso afeta apenas a ponderação dos equivalentes; no Modo 2 seria bloqueante."
+        )
+
+    if modo_mhu == MODO_MHU_1_1 and usar_us_para_eq:
+        ac_preview = calcular_parametros_equivalentes_por_us(ac_df, us_df_run)
+        st.caption("Parâmetros equivalentes calculados por US (ponderados pela área da AC) — apenas Modo 1.")
         st.dataframe(
             ac_preview[["ID_AC", "Infiltracao_eq_mm_h", "n_eq"]],
             use_container_width=True,
@@ -2889,6 +3276,12 @@ else:
         )
     else:
         ac_preview = ac_df.copy()
+        if modo_mhu == MODO_MHU_2_0:
+            # Mantém colunas de eq. para compatibilidade de payload/UI; não usadas no Modo 2.
+            if "Infiltracao_eq_mm_h" not in ac_preview.columns:
+                ac_preview["Infiltracao_eq_mm_h"] = 0.0
+            if "n_eq" not in ac_preview.columns:
+                ac_preview["n_eq"] = 0.1
 
     st.subheader("4) Chuva")
     st.caption(
@@ -3003,12 +3396,13 @@ else:
             horton_f0_multiplicador=float(horton_f0_multiplicador),
             usar_us_para_eq=bool(usar_us_para_eq),
             ac_df=ac_preview,
-            us_df=us_df,
+            us_df=us_df_run,
             chuva_df=chuva_df_edit,
             intervalo_registro_s=int(intervalo_registro_s),
             dt_integracao_s=int(dt_integracao_s),
             unidade_chuva=str(unidade_chuva),
             tempo_recessao_min=float(tempo_recessao_min),
+            modo_mhu=str(modo_mhu),
         )
         store = st.session_state.get("sim_store", {"last_id": None, "items": []})
         store["items"] = [x for x in store.get("items", []) if x.get("id") != payload["id"]]
@@ -3027,6 +3421,16 @@ else:
             if not horario_ok:
                 st.error("Corrija os horários de início/fim antes de rodar a simulação.")
                 st.stop()
+            if (
+                modo_mhu == MODO_MHU_2_0
+                and not areas_ok
+                and not bool(st.session_state.get("autorizar_norm_areas_us", False))
+            ):
+                st.error(
+                    "Modo 2: áreas US inconsistentes com as ACs. Corrija os valores ou autorize "
+                    "a normalização proporcional antes de rodar."
+                )
+                st.stop()
             erros = validar_campos_obrigatorios(
                 dt_seg=int(dt_seg),
                 duracao_min=int(duracao_min),
@@ -3039,7 +3443,7 @@ else:
                 horton_k_h_inv=float(horton_k_h_inv),
                 horton_f0_multiplicador=float(horton_f0_multiplicador),
                 ac_df=ac_df,
-                us_df=us_df,
+                us_df=us_df_run,
                 chuva_df=chuva_df_edit,
                 intervalo_registro_s=int(intervalo_registro_s),
                 unidade_chuva=str(unidade_chuva),
@@ -3055,12 +3459,15 @@ else:
             ac_df = ac_preview.copy()
             ac_df["ID_AC"] = ac_df["ID_AC"].astype(int)
             for col in ["Area_m2", "L_m", "S_m_m", "h0_m", "Infiltracao_eq_mm_h", "n_eq"]:
-                ac_df[col] = ac_df[col].astype(float)
+                if col in ac_df.columns:
+                    ac_df[col] = ac_df[col].astype(float)
 
-            df_saida, df_ac_detalhe = run_simulation(
+            df_saida, df_ac_detalhe, df_us_detalhe = executar_simulacao_mhu(
+                modo=str(modo_mhu),
                 dt=float(dt_integracao_s),
                 chuva_registros=chuva_regs,
                 ac_df=ac_df,
+                us_df=us_df_run,
                 exutorio_id=int(exutorio_id),
                 b_canal=float(b_canal),
                 s_canal=float(s_canal),
@@ -3072,16 +3479,20 @@ else:
                 usar_horton=bool(usar_horton),
                 horton_k_h_inv=float(horton_k_h_inv),
                 horton_f0_multiplicador=float(horton_f0_multiplicador),
+                estrategia_montante="proporcional_area",
             )
 
             tempo_chuva_s_run = max(len(chuva_regs) - 1, 0) * float(intervalo_registro_s)
             st.session_state["df_saida_validacao"] = df_saida.copy()
             st.session_state["df_ac_detalhe"] = df_ac_detalhe.copy()
+            st.session_state["df_us_detalhe"] = (
+                df_us_detalhe.copy() if df_us_detalhe is not None else None
+            )
             st.session_state["df_validacao_obs"] = montar_df_validacao(
                 df_saida, st.session_state.get("df_validacao_obs")
             )
             st.session_state["ac_df_loaded"] = ac_df.copy()
-            st.session_state["us_df_loaded"] = us_df.copy()
+            st.session_state["us_df_loaded"] = us_df_run.copy()
             st.session_state["chuva_df_loaded"] = chuva_df_edit.copy()
             st.session_state["sim_meta_balanco"] = {
                 "dt": float(dt_integracao_s),
@@ -3089,9 +3500,14 @@ else:
                 "tempo_recessao_s": float(tempo_recessao_min) * 60.0,
                 "exutorio_id": int(exutorio_id),
                 "intervalo_registro_s": float(intervalo_registro_s),
+                "unidade_chuva": str(unidade_chuva),
+                "modo_mhu": str(modo_mhu),
             }
 
-            st.success("Simulação concluída.")
+            rotulo_modo = (
+                "MHU 1.1 (equivalente)" if modo_mhu == MODO_MHU_1_1 else "MHU 2.0 (por classe US)"
+            )
+            st.success(f"Simulação concluída — {rotulo_modo}.")
             met_run = metricas_precipitacao(
                 chuva_regs, str(unidade_chuva), float(intervalo_registro_s)
             )
@@ -3118,7 +3534,45 @@ else:
             st.dataframe(df_saida, use_container_width=True, hide_index=True)
 
             st.subheader("Saída detalhada por AC")
-            st.dataframe(df_ac_detalhe, use_container_width=True, hide_index=True)
+            ids_ac_out = sorted(df_ac_detalhe["ID_AC"].unique())
+            ac_out_sel = st.selectbox("Filtrar AC", options=["Todas"] + list(ids_ac_out), key="out_ac_sel")
+            if ac_out_sel == "Todas":
+                st.dataframe(df_ac_detalhe, use_container_width=True, hide_index=True)
+            else:
+                st.dataframe(
+                    df_ac_detalhe[df_ac_detalhe["ID_AC"] == ac_out_sel].reset_index(drop=True),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            if df_us_detalhe is not None and not df_us_detalhe.empty:
+                st.subheader("Saída detalhada por classe de uso do solo (US)")
+                st.caption(
+                    "Cada classe possui h, Q_out, infiltração e volumes próprios. "
+                    "Estratégia de montante: mistura homogênea proporcional à área (experimental)."
+                )
+                ids_us_ac = sorted(df_us_detalhe["ID_AC"].unique())
+                us_ac_sel = st.selectbox("AC (detalhe US)", options=ids_us_ac, key="out_us_ac_sel")
+                df_us_ac = df_us_detalhe[df_us_detalhe["ID_AC"] == us_ac_sel]
+                ids_us = sorted(df_us_ac["ID_US"].unique())
+                us_sel = st.selectbox("Classe US", options=["Todas"] + list(ids_us), key="out_us_sel")
+                if us_sel == "Todas":
+                    st.dataframe(df_us_ac.reset_index(drop=True), use_container_width=True, hide_index=True)
+                    fig_us = px.line(
+                        df_us_ac,
+                        x="Tempo_s",
+                        y="Q_out_m3_s",
+                        color="Classe_US",
+                        title=f"Vazão por classe US — AC {us_ac_sel}",
+                    )
+                    fig_us.update_layout(xaxis_title="Tempo (s)", yaxis_title="Q_out (m³/s)")
+                    st.plotly_chart(fig_us, use_container_width=True)
+                else:
+                    st.dataframe(
+                        df_us_ac[df_us_ac["ID_US"] == us_sel].reset_index(drop=True),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
 
             tol_xlsx = float(st.session_state.get("tol_balanco_m3", TOL_BALANCO_HIDRICO_M3_DEFAULT))
             bal_xlsx = diagnosticar_balanco_hidrico(
@@ -3133,7 +3587,9 @@ else:
             st.session_state["balanco_hidrico"] = bal_xlsx
             st.download_button(
                 "Baixar resultados em Excel",
-                data=montar_excel_resultados(df_saida, df_ac_detalhe, bal_xlsx),
+                data=montar_excel_resultados(
+                    df_saida, df_ac_detalhe, bal_xlsx, df_us_detalhe=df_us_detalhe
+                ),
                 file_name="resultado_modelo_hidrologico.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )

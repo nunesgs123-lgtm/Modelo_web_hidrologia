@@ -3,7 +3,22 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Versionamento semântico adaptado ao ciclo do MHU (`MAJOR.MINOR`).
 
-## [Unreleased] — MHU 1.1 (em preparação)
+## [Unreleased] — MHU 2.0 (experimental)
+
+### Added — MHU 2.0 (processamento por classe US)
+
+- **Modo 1** na interface = formulação MHU 1.1 (parâmetros equivalentes por AC), preservada.
+- **Modo 2** experimental: cada classe de uso do solo tem área, Manning, infiltração, armazenamento, lâmina e vazão próprios.
+- Formulação: `W_ij = A_ij/L_i`, `h_ij = V_ij/A_ij`, `Q_ij = (W_ij/n_ij)·h_ij^(5/3)·√S_i`, `Q_i = Σ Q_ij`.
+- Infiltração da AC = soma dos volumes infiltrados por classe; **sem** média aritmética de Manning.
+- Verificação de consistência de áreas (erro abs. e %); normalização proporcional **somente** com autorização explícita.
+- Distribuição de Q de montante entre classes: hipótese experimental de **mistura homogênea** (proporcional à área), com interface extensível (`mhu_modo2.py`).
+- Resultados visualizáveis por AC e por classe US; Excel com aba `Detalhe_US`.
+- Aba **Comparação MHU 1.1 × 2.0** com os mesmos dados de entrada.
+- Documentação conceitual: `MHU_2.0_CONCEPCAO.md` (mudança de concepção matemática, não só correção de código).
+- Snapshot congelado do MHU 1.1 em `snapshots/MHU_1.1/`.
+
+## [1.1.0] — 2026-11-26 — MHU 1.1
 
 ### Changed — interface e gráfico de nível
 
