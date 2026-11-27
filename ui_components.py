@@ -265,7 +265,11 @@ def fig_canal_secao(
 
 
 def go_to(page: str) -> None:
+    """
+    Agenda troca de página para o próximo rerun.
+
+    Não altera `pagina_menu_label` aqui: essa chave pertence ao `st.sidebar.radio`
+    já instanciado neste run. A sincronização ocorre no início de `_run_streamlit_ui`
+    (antes do menu), via `pending_page`.
+    """
     st.session_state["pending_page"] = page
-    st.session_state["pagina_menu"] = page
-    # sincroniza label do radio
-    st.session_state["pagina_menu_label"] = f"{PAGE_ICONS.get(page, '•')}  {page}"

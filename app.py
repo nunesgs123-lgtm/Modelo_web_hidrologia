@@ -2760,7 +2760,7 @@ def _run_streamlit_ui() -> None:
                         aplicar_payload_em_session(item)
                         st.session_state["sim_store"]["last_id"] = item.get("id")
                         salvar_simulacoes_salvas(st.session_state["sim_store"])
-                        st.session_state["pending_page"] = "Simulação"
+                        st.session_state["pending_page"] = "Nova simulação"
                         st.rerun()
                     if c2.button("Excluir", key=f"del_{item.get('id')}"):
                         st.session_state["sim_store"]["items"] = [
