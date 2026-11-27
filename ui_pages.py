@@ -248,9 +248,7 @@ def render_resultados() -> None:
             st.rerun()
         return
 
-    df_s = df_s.copy()
-    if "Tempo_hhmm" not in df_s.columns and "Tempo_s" in df_s.columns:
-        df_s["Tempo_hhmm"] = df_s["Tempo_s"].astype(str)
+    df_s = _ensure_tempo_hhmm(df_s)
 
     # Métricas de precipitação se meta tiver info
     p_acum = i_max = dur = None
@@ -321,7 +319,7 @@ def render_resultados() -> None:
     fig_q = go.Figure()
     fig_q.add_trace(
         go.Scatter(
-            x=df_s["Tempo_hhmm"] if "Tempo_hhmm" in df_s.columns else df_s["Tempo_s"],
+            x=df_s["Tempo_hhmm"],
             y=df_s["Q_ex_m3_s"],
             mode="lines",
             name="Q_ex (m³/s)",
@@ -332,9 +330,18 @@ def render_resultados() -> None:
         )
     )
     i_q = int(df_s["Q_ex_m3_s"].idxmax())
-    x_peak = df_s.loc[i_q, "Tempo_hhmm"] if "Tempo_hhmm" in df_s.columns else df_s.loc[i_q, "Tempo_s"]
+    x_peak = df_s.loc[i_q, "Tempo_hhmm"]
     annotate_peak(fig_q, x_peak, q_max, f"Pico {q_max:.3f} m³/s", color=COLOR_Q)
     apply_mhu_layout(fig_q, title="Hidrograma de vazão no exutório")
+    fig_q.update_layout(
+        xaxis=dict(
+            title="Horário",
+            type="category",
+            categoryorder="array",
+            categoryarray=list(df_s["Tempo_hhmm"]),
+        ),
+        yaxis=dict(title="Vazão (m³/s)"),
+    )
     chart_container(fig_q, filename="hidrograma_vazao")
 
     with st.expander("Tabelas detalhadas", expanded=False):
@@ -367,17 +374,56 @@ def render_resultados() -> None:
             st.error(f"Falha ao montar Excel: {exc}")
 
 
+def _ensure_tempo_hhmm(df: pd.DataFrame) -> pd.DataFrame:
+    """Garante coluna Tempo_hhmm (HH:MM) para eixos de gráficos."""
+    from datetime import datetime, timedelta
+
+    out = df.copy()
+    if "Tempo_hhmm" in out.columns and len(out) > 0 and ":" in str(out["Tempo_hhmm"].iloc[0]):
+        return out
+
+    meta = st.session_state.get("sim_meta_balanco") or {}
+    hora = str(
+        st.session_state.get("hora_inicio_evento")
+        or meta.get("hora_inicio")
+        or "12:00"
+    )
+    try:
+        h, m = [int(x) for x in hora.split(":")]
+    except Exception:
+        h, m = 12, 0
+    t0 = datetime(2000, 1, 1, h, m)
+
+    if "Tempo_s" in out.columns:
+        out["Tempo_hhmm"] = [
+            (t0 + timedelta(seconds=float(s))).strftime("%H:%M")
+            for s in out["Tempo_s"]
+        ]
+    else:
+        dt = int(float(meta.get("dt") or 1))
+        out["Tempo_hhmm"] = [
+            (t0 + timedelta(seconds=i * dt)).strftime("%H:%M") for i in range(len(out))
+        ]
+    return out
+
+
 def enhance_fig_nivel(df_saida: pd.DataFrame) -> go.Figure:
     """Versão visual do hidrograma nível+hietograma (mesmos dados)."""
-    x = df_saida["Tempo_hhmm"] if "Tempo_hhmm" in df_saida.columns else df_saida["Tempo_s"]
+    df_saida = _ensure_tempo_hhmm(df_saida)
+    x = df_saida["Tempo_hhmm"]
+    p_max = float(pd.to_numeric(df_saida["P_mm_h"], errors="coerce").max() or 0.0)
+
     fig = go.Figure()
+    # Barras no eixo base (atrás). Nível no eixo overlay (na frente).
+    # No Plotly, traços do eixo overlaying pintam acima do eixo base.
     fig.add_trace(
         go.Bar(
             x=x,
             y=df_saida["P_mm_h"],
             name="Precipitação (mm/h)",
             marker=dict(color=COLOR_PREC, line=dict(width=0)),
-            yaxis="y2",
+            yaxis="y",
+            zorder=0,
             hovertemplate="Precipitação: %{y:.2f} mm/h<extra></extra>",
         )
     )
@@ -388,22 +434,35 @@ def enhance_fig_nivel(df_saida: pd.DataFrame) -> go.Figure:
             name="Nível simulado (m)",
             mode="lines",
             line=dict(color=COLOR_SIM, width=2.6),
+            yaxis="y2",
+            zorder=1,
             hovertemplate="Nível: %{y:.4f} m<extra></extra>",
         )
     )
-    p_max = float(pd.to_numeric(df_saida["P_mm_h"], errors="coerce").max() or 0.0)
     i_n = int(pd.to_numeric(df_saida["Nivel_m"], errors="coerce").idxmax())
-    annotate_peak(fig, x.iloc[i_n] if hasattr(x, "iloc") else x[i_n], float(df_saida.loc[i_n, "Nivel_m"]), f"Pico {float(df_saida.loc[i_n, 'Nivel_m']):.3f} m")
+    annotate_peak(
+        fig,
+        x.iloc[i_n] if hasattr(x, "iloc") else x[i_n],
+        float(df_saida.loc[i_n, "Nivel_m"]),
+        f"Pico {float(df_saida.loc[i_n, 'Nivel_m']):.3f} m",
+        yref="y2",
+    )
     apply_mhu_layout(fig, title="Hidrograma de nível e hietograma de precipitação", height=440)
     fig.update_layout(
-        xaxis=dict(title="Horário", type="category"),
-        yaxis=dict(title="Nível no canal (m)", side="left"),
-        yaxis2=dict(
+        xaxis=dict(title="Horário", type="category", categoryorder="array", categoryarray=list(x)),
+        yaxis=dict(
             title="Precipitação (mm/h)",
-            overlaying="y",
             side="right",
             showgrid=False,
+            zeroline=False,
             range=[max(p_max * 1.25, 1.0), 0.0],
+        ),
+        yaxis2=dict(
+            title="Nível no canal (m)",
+            overlaying="y",
+            side="left",
+            showgrid=True,
+            zeroline=True,
         ),
         bargap=0.05,
     )

@@ -807,14 +807,17 @@ def fig_nivel_com_hietograma(df_saida: pd.DataFrame) -> go.Figure:
     from plot_theme import COLOR_PREC, COLOR_SIM, apply_mhu_layout, annotate_peak
 
     x = df_saida["Tempo_hhmm"] if "Tempo_hhmm" in df_saida.columns else df_saida["Tempo_s"]
+    p_max = float(pd.to_numeric(df_saida["P_mm_h"], errors="coerce").max() or 0.0)
     fig = go.Figure()
+    # Barras no eixo base (atrás); nível no overlay (na frente).
     fig.add_trace(
         go.Bar(
             x=x,
             y=df_saida["P_mm_h"],
             name="Precipitação (mm/h)",
             marker=dict(color=COLOR_PREC, line=dict(width=0)),
-            yaxis="y2",
+            yaxis="y",
+            zorder=0,
             hovertemplate="Precipitação: %{y:.2f} mm/h<extra></extra>",
         )
     )
@@ -825,21 +828,35 @@ def fig_nivel_com_hietograma(df_saida: pd.DataFrame) -> go.Figure:
             name="Nível no canal (m)",
             mode="lines",
             line=dict(color=COLOR_SIM, width=2.5),
-            yaxis="y",
+            yaxis="y2",
+            zorder=1,
             hovertemplate="Nível: %{y:.4f} m<extra></extra>",
         )
     )
-    p_max = float(pd.to_numeric(df_saida["P_mm_h"], errors="coerce").max() or 0.0)
+    i_n = int(pd.to_numeric(df_saida["Nivel_m"], errors="coerce").idxmax())
+    annotate_peak(
+        fig,
+        x.iloc[i_n] if hasattr(x, "iloc") else x[i_n],
+        float(df_saida.loc[i_n, "Nivel_m"]),
+        f"Pico {float(df_saida.loc[i_n, 'Nivel_m']):.3f} m",
+        yref="y2",
+    )
     apply_mhu_layout(fig, title="Hidrograma de nível e hietograma de precipitação")
     fig.update_layout(
         xaxis=dict(title="Horário", type="category"),
-        yaxis=dict(title="Nível no canal (m)", side="left", showgrid=True, zeroline=True),
-        yaxis2=dict(
+        yaxis=dict(
             title="Precipitação (mm/h)",
-            overlaying="y",
             side="right",
             showgrid=False,
+            zeroline=False,
             range=[max(p_max * 1.25, 1.0), 0.0],
+        ),
+        yaxis2=dict(
+            title="Nível no canal (m)",
+            overlaying="y",
+            side="left",
+            showgrid=True,
+            zeroline=True,
         ),
         bargap=0.05,
     )
@@ -3099,7 +3116,17 @@ def _run_streamlit_ui() -> None:
                                 horton_k_h_inv=float(best["k_h_inv"]),
                                 horton_f0_multiplicador=float(best["f0_fc"]),
                             )
-                            st.session_state["df_saida_validacao"] = df_saida_best.copy()
+                            df_saida_best = df_saida_best.copy()
+                            if "Tempo_hhmm" not in df_saida_best.columns:
+                                hora_ap = str(
+                                    st.session_state.get("hora_inicio_evento")
+                                    or (st.session_state.get("sim_meta_balanco") or {}).get("hora_inicio")
+                                    or "12:00"
+                                )
+                                df_saida_best["Tempo_hhmm"] = montar_tempo_evento_hhmm(
+                                    len(df_saida_best), int(dt_int_ap), hora_ap
+                                )
+                            st.session_state["df_saida_validacao"] = df_saida_best
                             st.session_state["df_validacao_obs"] = montar_df_validacao(
                                 df_saida_best, st.session_state.get("df_validacao_obs")
                             )
@@ -3725,6 +3752,9 @@ def _run_streamlit_ui() -> None:
                     )
 
                     tempo_chuva_s_run = max(len(chuva_regs) - 1, 0) * float(intervalo_registro_s)
+                    tempo_hhmm = montar_tempo_evento_hhmm(len(df_saida), int(dt_integracao_s), hora_inicio_str)
+                    df_saida = df_saida.copy()
+                    df_saida["Tempo_hhmm"] = tempo_hhmm
                     st.session_state["df_saida_validacao"] = df_saida.copy()
                     st.session_state["df_ac_detalhe"] = df_ac_detalhe.copy()
                     st.session_state["df_us_detalhe"] = (
@@ -3744,6 +3774,7 @@ def _run_streamlit_ui() -> None:
                         "intervalo_registro_s": float(intervalo_registro_s),
                         "unidade_chuva": str(unidade_chuva),
                         "modo_mhu": str(modo_mhu),
+                        "hora_inicio": str(hora_inicio_str),
                     }
 
                     rotulo_modo = (
@@ -3758,9 +3789,6 @@ def _run_streamlit_ui() -> None:
                     r2.metric("Intensidade máxima (mm/h)", f"{met_run['I_max_mm_h']:.2f}")
                     r3.metric("Duração do evento (min)", f"{met_run['Duracao_evento_min']:.1f}")
 
-                    tempo_hhmm = montar_tempo_evento_hhmm(len(df_saida), int(dt_integracao_s), hora_inicio_str)
-                    df_saida = df_saida.copy()
-                    df_saida["Tempo_hhmm"] = tempo_hhmm
                     c1, c2, c3 = st.columns(3)
                     c1.metric("Pico de vazão (m³/s)", f"{df_saida['Q_ex_m3_s'].max():.4f}")
                     c2.metric("Pico de nível (m)", f"{df_saida['Nivel_m'].max():.4f}")

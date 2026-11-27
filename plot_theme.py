@@ -77,10 +77,20 @@ def apply_mhu_layout(fig: go.Figure, *, title: str | None = None, height: int | 
     return fig
 
 
-def annotate_peak(fig: go.Figure, x, y, text: str, *, color: str = HYDRO) -> go.Figure:
+def annotate_peak(
+    fig: go.Figure,
+    x,
+    y,
+    text: str,
+    *,
+    color: str = HYDRO,
+    yref: str = "y",
+) -> go.Figure:
     fig.add_annotation(
         x=x,
         y=y,
+        xref="x",
+        yref=yref,
         text=text,
         showarrow=True,
         arrowhead=2,
