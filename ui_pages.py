@@ -48,9 +48,24 @@ def _fmt(v, nd=3):
     return f"{float(v):.{nd}f}"
 
 
-def render_visao_geral() -> None:
-    import app as mhu
+def _mhu_core():
+    """
+    Acesso às funções hidrológicas sem `import app` (que reexecutaria a UI
+    e causaria StreamlitDuplicateElementKey no menu lateral).
+    No Streamlit, o entrypoint já está em sys.modules['__main__'].
+    """
+    import sys
 
+    main = sys.modules.get("__main__")
+    if main is not None and hasattr(main, "diagnosticar_balanco_hidrico"):
+        return main
+    # Fallback (testes / execução fora do Streamlit)
+    import importlib
+
+    return importlib.import_module("app")
+
+
+def render_visao_geral() -> None:
     hero(
         "Modelo Hidrológico Urbano (MHU)",
         "Plataforma científica para simulação de eventos de chuva–vazão em bacias urbanas: "
@@ -217,7 +232,7 @@ def render_diagnostico_numerico() -> None:
 
 
 def render_resultados() -> None:
-    import app as mhu
+    mhu = _mhu_core()
 
     page_header("Resultados da simulação")
     df_s = st.session_state.get("df_saida_validacao")
