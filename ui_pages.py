@@ -410,60 +410,94 @@ def _ensure_tempo_hhmm(df: pd.DataFrame) -> pd.DataFrame:
 def enhance_fig_nivel(df_saida: pd.DataFrame) -> go.Figure:
     """Versão visual do hidrograma nível+hietograma (mesmos dados)."""
     df_saida = _ensure_tempo_hhmm(df_saida)
-    x = df_saida["Tempo_hhmm"]
-    p_max = float(pd.to_numeric(df_saida["P_mm_h"], errors="coerce").max() or 0.0)
+    x_vals = [str(v) for v in df_saida["Tempo_hhmm"].tolist()]
+    p_vals = pd.to_numeric(df_saida["P_mm_h"], errors="coerce").fillna(0.0)
+    p_max = float(p_vals.max() or 0.0)
 
     fig = go.Figure()
-    # Barras no eixo base (atrás). Nível no eixo overlay (na frente).
-    # No Plotly, traços do eixo overlaying pintam acima do eixo base.
+
+    # Hietograma via shapes (layer=below): fica atrás da linha de nível.
+    # go.Bar em eixo overlay costuma cobrir o scatter independentemente da ordem.
+    for i, pi in enumerate(p_vals.tolist()):
+        if not np.isfinite(pi) or float(pi) <= 0.0:
+            continue
+        fig.add_shape(
+            type="rect",
+            xref="x",
+            yref="y2",
+            x0=i - 0.42,
+            x1=i + 0.42,
+            y0=0,
+            y1=float(pi),
+            layer="below",
+            fillcolor=COLOR_PREC,
+            opacity=0.9,
+            line=dict(width=0),
+        )
+
+    # Legenda da precipitação (barra dummy sem desenhar dados).
     fig.add_trace(
         go.Bar(
-            x=x,
-            y=df_saida["P_mm_h"],
+            x=[x_vals[0]] if x_vals else [0],
+            y=[0],
             name="Precipitação (mm/h)",
             marker=dict(color=COLOR_PREC, line=dict(width=0)),
-            yaxis="y",
-            zorder=0,
-            hovertemplate="Precipitação: %{y:.2f} mm/h<extra></extra>",
+            yaxis="y2",
+            showlegend=True,
+            hoverinfo="skip",
+            visible="legendonly",
         )
     )
+    # Hover da chuva (marcadores transparentes).
     fig.add_trace(
         go.Scatter(
-            x=x,
+            x=x_vals,
+            y=p_vals,
+            name="Precipitação (mm/h)",
+            mode="markers",
+            marker=dict(size=12, color=COLOR_PREC, opacity=0),
+            yaxis="y2",
+            hovertemplate="Precipitação: %{y:.2f} mm/h<extra></extra>",
+            showlegend=False,
+        )
+    )
+    # Linha de nível — traço final, acima das shapes.
+    fig.add_trace(
+        go.Scatter(
+            x=x_vals,
             y=df_saida["Nivel_m"],
             name="Nível simulado (m)",
             mode="lines",
-            line=dict(color=COLOR_SIM, width=2.6),
-            yaxis="y2",
-            zorder=1,
+            line=dict(color=COLOR_SIM, width=2.8),
+            yaxis="y",
             hovertemplate="Nível: %{y:.4f} m<extra></extra>",
         )
     )
+
     i_n = int(pd.to_numeric(df_saida["Nivel_m"], errors="coerce").idxmax())
     annotate_peak(
         fig,
-        x.iloc[i_n] if hasattr(x, "iloc") else x[i_n],
+        x_vals[i_n],
         float(df_saida.loc[i_n, "Nivel_m"]),
         f"Pico {float(df_saida.loc[i_n, 'Nivel_m']):.3f} m",
-        yref="y2",
+        yref="y",
     )
     apply_mhu_layout(fig, title="Hidrograma de nível e hietograma de precipitação", height=440)
     fig.update_layout(
-        xaxis=dict(title="Horário", type="category", categoryorder="array", categoryarray=list(x)),
-        yaxis=dict(
+        xaxis=dict(
+            title="Horário",
+            type="category",
+            categoryorder="array",
+            categoryarray=x_vals,
+        ),
+        yaxis=dict(title="Nível no canal (m)", side="left", showgrid=True, zeroline=True),
+        yaxis2=dict(
             title="Precipitação (mm/h)",
+            overlaying="y",
             side="right",
             showgrid=False,
             zeroline=False,
             range=[max(p_max * 1.25, 1.0), 0.0],
         ),
-        yaxis2=dict(
-            title="Nível no canal (m)",
-            overlaying="y",
-            side="left",
-            showgrid=True,
-            zeroline=True,
-        ),
-        bargap=0.05,
     )
     return fig
