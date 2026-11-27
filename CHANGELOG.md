@@ -5,6 +5,22 @@ Versionamento semântico adaptado ao ciclo do MHU (`MAJOR.MINOR`).
 
 ## [Unreleased] — MHU 2.0 (experimental)
 
+### Changed — reformulação visual UI/UX (sem alteração hidrológica)
+
+- Identidade visual MHU (paleta azul-petróleo/verde-água), logo SVG, `.streamlit/config.toml`, `assets/styles.css`.
+- Menu lateral agrupado (Modelagem / Análise científica / Documentação) com ícones e rodapé de versão.
+- Páginas novas: Visão geral, Resultados, Metodologia, Diagnóstico numérico.
+- Nova simulação em 6 etapas (evento, canal com seção esquemática, ACs, US, precipitação, revisão).
+- Tema Plotly compartilhado (`plot_theme.py`), cards/métricas (`ui_components.py`), Sankey no balanço, cards na validação.
+- Equações, parâmetros e rotinas numéricas **não** alterados.
+
+### Added — auditoria, testes pytest e metodologia
+
+- Suíte `tests/` com pytest (26 casos): chuva/infiltração/recessão, conservação de massa (1–N ACs), rejeição de ciclos/bifurcação, independência do volume precipitado ao Δt, convergência numérica, inversão de Manning no canal, t=0, compatibilidade de simulações salvas, equivalência Modo 1×2 (classe única), Sd≡0, indicadores estatísticos, Excel e AppTest Streamlit.
+- Documento `METODOLOGIA_MODELO.md` (equações, variáveis, hipóteses, solução numérica, diferenças 1.0/1.1/2.0, limitações, calibração).
+- `pytest` incluído em `requirements.txt`; `pytest.ini` configurado.
+- Correção menor: ID de simulação salva usa `datetime.now()` (evita `utcnow` deprecado).
+
 ### Added — MHU 2.0 (processamento por classe US)
 
 - **Modo 1** na interface = formulação MHU 1.1 (parâmetros equivalentes por AC), preservada.

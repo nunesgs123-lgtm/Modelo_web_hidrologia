@@ -12,7 +12,22 @@ import plotly.graph_objects as go
 import streamlit as st
 
 
-st.set_page_config(page_title="Modelo Hidrológico Urbano", layout="wide")
+st.set_page_config(
+    page_title="MHU — Modelo Hidrológico Urbano",
+    page_icon="💧",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# Identidade visual (não altera lógica hidrológica)
+try:
+    from plot_theme import register_mhu_plotly_theme
+    from ui_components import inject_mhu_styles
+
+    register_mhu_plotly_theme()
+    inject_mhu_styles()
+except Exception:
+    pass
 
 GLOSSARIO_ROWS = [
     {"Termo": "Intervalo_registro_s", "Unidade": "s", "Descricao": "Intervalo temporal entre registros de precipitação (ex.: 600 s)."},
@@ -390,7 +405,7 @@ def gerar_payload_simulacao(
     dt_int = int(dt_integracao_s if dt_integracao_s is not None else dt_seg)
     dt_reg = int(intervalo_registro_s if intervalo_registro_s is not None else dt_seg)
     return {
-        "id": datetime.utcnow().strftime("%Y%m%d%H%M%S%f"),
+        "id": datetime.now().strftime("%Y%m%d%H%M%S%f"),
         "titulo": titulo.strip() if titulo.strip() else f"Simulação {datetime.now().strftime('%d/%m/%Y %H:%M')}",
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "params": {
@@ -798,7 +813,16 @@ def fig_nivel_com_hietograma(df_saida: pd.DataFrame) -> go.Figure:
     """
     Hidrograma de nível no canal com hietograma de precipitação no mesmo gráfico,
     em eixos distintos (nível à esquerda; precipitação à direita, invertido).
+    Apenas apresentação visual — mesmos dados de entrada/saída.
     """
+    try:
+        from ui_pages import enhance_fig_nivel
+
+        return enhance_fig_nivel(df_saida)
+    except Exception:
+        pass
+    from plot_theme import COLOR_PREC, COLOR_SIM, apply_mhu_layout, annotate_peak
+
     x = df_saida["Tempo_hhmm"] if "Tempo_hhmm" in df_saida.columns else df_saida["Tempo_s"]
     fig = go.Figure()
     fig.add_trace(
@@ -806,7 +830,7 @@ def fig_nivel_com_hietograma(df_saida: pd.DataFrame) -> go.Figure:
             x=x,
             y=df_saida["P_mm_h"],
             name="Precipitação (mm/h)",
-            marker=dict(color="rgba(70, 130, 180, 0.45)", line=dict(width=0)),
+            marker=dict(color=COLOR_PREC, line=dict(width=0)),
             yaxis="y2",
             hovertemplate="Precipitação: %{y:.2f} mm/h<extra></extra>",
         )
@@ -817,32 +841,24 @@ def fig_nivel_com_hietograma(df_saida: pd.DataFrame) -> go.Figure:
             y=df_saida["Nivel_m"],
             name="Nível no canal (m)",
             mode="lines",
-            line=dict(color="#d62728", width=2.5),
+            line=dict(color=COLOR_SIM, width=2.5),
             yaxis="y",
             hovertemplate="Nível: %{y:.4f} m<extra></extra>",
         )
     )
     p_max = float(pd.to_numeric(df_saida["P_mm_h"], errors="coerce").max() or 0.0)
+    apply_mhu_layout(fig, title="Hidrograma de nível e hietograma de precipitação")
     fig.update_layout(
-        title="Hidrograma de nível e hietograma de precipitação",
         xaxis=dict(title="Horário", type="category"),
-        yaxis=dict(
-            title="Nível no canal (m)",
-            side="left",
-            showgrid=True,
-            zeroline=True,
-        ),
+        yaxis=dict(title="Nível no canal (m)", side="left", showgrid=True, zeroline=True),
         yaxis2=dict(
             title="Precipitação (mm/h)",
             overlaying="y",
             side="right",
             showgrid=False,
-            # Hietograma clássico: precipitação cresce de cima para baixo
             range=[max(p_max * 1.25, 1.0), 0.0],
         ),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
         bargap=0.05,
-        margin=dict(t=80, r=60, l=60, b=50),
     )
     return fig
 
@@ -2209,33 +2225,56 @@ if "sim_store_loaded" not in st.session_state:
 if "pending_page" not in st.session_state:
     st.session_state["pending_page"] = None
 
+# Compatibilidade: nomes antigos de página → novos
+_LEGACY_PAGE_MAP = {
+    "Simulação": "Nova simulação",
+    "Balanço Hídrico": "Balanço hídrico",
+    "Sugestão de calibração": "Calibração",
+    "Descrição das variáveis": "Glossário de variáveis",
+}
+if st.session_state.get("pagina_menu") in _LEGACY_PAGE_MAP:
+    st.session_state["pagina_menu"] = _LEGACY_PAGE_MAP[st.session_state["pagina_menu"]]
+
 if st.session_state.get("pending_page") is not None:
-    st.session_state["pagina_menu"] = st.session_state["pending_page"]
+    dest = st.session_state["pending_page"]
+    dest = _LEGACY_PAGE_MAP.get(dest, dest)
+    st.session_state["pagina_menu"] = dest
+    from ui_components import PAGE_ICONS
+
+    st.session_state["pagina_menu_label"] = f"{PAGE_ICONS.get(dest, '•')}  {dest}"
     st.session_state["pending_page"] = None
 
-with st.sidebar:
-    st.header("Menu")
-    pagina = st.radio(
-        "Navegar",
-        [
-            "Simulação",
-            "Simulações salvas",
-            "Balanço Hídrico",
-            "Comparação MHU 1.1 × 2.0",
-            "Validação",
-            "Sugestão de calibração",
-            "Instruções",
-            "Descrição das variáveis",
-        ],
-        label_visibility="collapsed",
-        key="pagina_menu",
-    )
+from ui_components import render_sidebar_nav
 
-if pagina == "Balanço Hídrico":
-    st.title("Balanço Hídrico")
-    st.caption(
-        "Diagnóstico de **fechamento numérico** de massa. "
-        "Não confunda com validação física do modelo (ver aba Validação)."
+pagina = render_sidebar_nav(default="Visão geral")
+
+if pagina == "Visão geral":
+    from ui_pages import render_visao_geral
+
+    render_visao_geral()
+
+elif pagina == "Resultados":
+    from ui_pages import render_resultados
+
+    render_resultados()
+
+elif pagina == "Metodologia":
+    from ui_pages import render_metodologia
+
+    render_metodologia()
+
+elif pagina == "Diagnóstico numérico":
+    from ui_pages import render_diagnostico_numerico
+
+    render_diagnostico_numerico()
+
+elif pagina == "Balanço hídrico":
+    from ui_components import page_header
+
+    page_header(
+        "Balanço hídrico",
+        "Diagnóstico de fechamento numérico de massa. "
+        "Não confunda com validação física do modelo (ver Validação).",
     )
     st.session_state.setdefault("tol_balanco_m3", float(TOL_BALANCO_HIDRICO_M3_DEFAULT))
     tol_ui = st.number_input(
@@ -2252,10 +2291,13 @@ if pagina == "Balanço Hídrico":
     meta_sim = st.session_state.get("sim_meta_balanco")
     if df_s is None or df_ac is None or ac_ref is None or meta_sim is None:
         st.warning(
-            "Nenhuma simulação disponível. Vá em **Simulação**, rode o modelo e volte a esta aba."
+            "Nenhuma simulação disponível. Vá em **Nova simulação**, rode o modelo e volte a esta aba."
         )
     else:
         try:
+            from plot_theme import COLOR_INFIL, COLOR_PREC, COLOR_Q, HYDRO, TEAL, ALERT, apply_mhu_layout
+            from ui_components import chart_container, metric_cards
+
             bal = diagnosticar_balanco_hidrico(
                 df_saida=df_s,
                 df_ac_detalhe=df_ac,
@@ -2277,28 +2319,83 @@ if pagina == "Balanço Hídrico":
             )
 
             st.subheader("Indicadores — evento de chuva")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Erro abs. (m³)", f"{row_ev['Erro_abs_m3']:.4e}")
-            c2.metric("Erro rel. (%)", f"{row_ev['Erro_rel_pct']:.4e}")
-            c3.metric("Coef. escoamento", f"{row_ev['Coef_escoamento']:.4f}" if np.isfinite(row_ev["Coef_escoamento"]) else "—")
-            c4.metric("Vol. exutório (m³)", f"{row_ev['Volume_acum_exutorio_m3']:.4f}")
-            d1, d2, d3, d4 = st.columns(4)
-            d1.metric("% infiltrado", f"{row_ev['Pct_infiltrado']:.2f}" if np.isfinite(row_ev["Pct_infiltrado"]) else "—")
-            d2.metric("% armazenado", f"{row_ev['Pct_armazenado']:.2f}" if np.isfinite(row_ev["Pct_armazenado"]) else "—")
-            d3.metric("Lâmina escoamento (mm)", f"{row_ev['Lamina_escoamento_mm']:.3f}")
-            d4.metric("Lâmina infiltrada (mm)", f"{row_ev['Lamina_infiltrada_mm']:.3f}")
+            metric_cards(
+                [
+                    {"label": "Erro abs.", "value": f"{row_ev['Erro_abs_m3']:.4e}", "unit": "m³"},
+                    {"label": "Erro rel.", "value": f"{row_ev['Erro_rel_pct']:.4e}", "unit": "%"},
+                    {
+                        "label": "Coef. escoamento",
+                        "value": f"{row_ev['Coef_escoamento']:.4f}" if np.isfinite(row_ev["Coef_escoamento"]) else "—",
+                    },
+                    {"label": "Vol. exutório", "value": f"{row_ev['Volume_acum_exutorio_m3']:.4f}", "unit": "m³"},
+                    {
+                        "label": "% infiltrado",
+                        "value": f"{row_ev['Pct_infiltrado']:.2f}" if np.isfinite(row_ev["Pct_infiltrado"]) else "—",
+                    },
+                    {
+                        "label": "% armazenado",
+                        "value": f"{row_ev['Pct_armazenado']:.2f}" if np.isfinite(row_ev["Pct_armazenado"]) else "—",
+                    },
+                    {"label": "Lâmina escoamento", "value": f"{row_ev['Lamina_escoamento_mm']:.3f}", "unit": "mm"},
+                    {"label": "Lâmina infiltrada", "value": f"{row_ev['Lamina_infiltrada_mm']:.3f}", "unit": "mm"},
+                ]
+            )
 
             st.subheader("Indicadores — chuva + recessão")
-            e1, e2, e3, e4 = st.columns(4)
-            e1.metric("Erro abs. (m³)", f"{row_full['Erro_abs_m3']:.4e}")
-            e2.metric("Erro rel. (%)", f"{row_full['Erro_rel_pct']:.4e}")
-            e3.metric("Coef. escoamento", f"{row_full['Coef_escoamento']:.4f}" if np.isfinite(row_full["Coef_escoamento"]) else "—")
-            e4.metric("Vol. exutório (m³)", f"{row_full['Volume_acum_exutorio_m3']:.4f}")
-            f1, f2, f3, f4 = st.columns(4)
-            f1.metric("% infiltrado", f"{row_full['Pct_infiltrado']:.2f}" if np.isfinite(row_full["Pct_infiltrado"]) else "—")
-            f2.metric("% armazenado", f"{row_full['Pct_armazenado']:.2f}" if np.isfinite(row_full["Pct_armazenado"]) else "—")
-            f3.metric("Lâmina escoamento (mm)", f"{row_full['Lamina_escoamento_mm']:.3f}")
-            f4.metric("Lâmina infiltrada (mm)", f"{row_full['Lamina_infiltrada_mm']:.3f}")
+            metric_cards(
+                [
+                    {"label": "Erro abs.", "value": f"{row_full['Erro_abs_m3']:.4e}", "unit": "m³"},
+                    {"label": "Erro rel.", "value": f"{row_full['Erro_rel_pct']:.4e}", "unit": "%"},
+                    {
+                        "label": "Coef. escoamento",
+                        "value": f"{row_full['Coef_escoamento']:.4f}" if np.isfinite(row_full["Coef_escoamento"]) else "—",
+                    },
+                    {"label": "Vol. exutório", "value": f"{row_full['Volume_acum_exutorio_m3']:.4f}", "unit": "m³"},
+                    {
+                        "label": "% infiltrado",
+                        "value": f"{row_full['Pct_infiltrado']:.2f}" if np.isfinite(row_full["Pct_infiltrado"]) else "—",
+                    },
+                    {
+                        "label": "% armazenado",
+                        "value": f"{row_full['Pct_armazenado']:.2f}" if np.isfinite(row_full["Pct_armazenado"]) else "—",
+                    },
+                    {"label": "Lâmina escoamento", "value": f"{row_full['Lamina_escoamento_mm']:.3f}", "unit": "mm"},
+                    {"label": "Lâmina infiltrada", "value": f"{row_full['Lamina_infiltrada_mm']:.3f}", "unit": "mm"},
+                ]
+            )
+
+            # Sankey da distribuição (chuva + recessão) — apenas visual
+            try:
+                v_prec = max(float(row_full["V_precipitacao_m3"]), 0.0)
+                v_inf = max(float(row_full["V_infiltracao_m3"]), 0.0)
+                v_ex = max(float(row_full["V_exutorio_m3"]), 0.0)
+                v_arm = max(float(row_full["V_final_m3"]) - float(row_full["V_inicial_m3"]), 0.0)
+                v_res = abs(float(row_full["Erro_bacia_m3"]))
+                fig_sankey = go.Figure(
+                    data=[
+                        go.Sankey(
+                            node=dict(
+                                label=["Precipitação", "Infiltração", "Exutório", "Δ Armazenamento", "Resíduo |ε|"],
+                                color=[COLOR_PREC, COLOR_INFIL, COLOR_Q, TEAL, ALERT],
+                            ),
+                            link=dict(
+                                source=[0, 0, 0, 0],
+                                target=[1, 2, 3, 4],
+                                value=[v_inf, v_ex, v_arm, max(v_res, 1e-12)],
+                                color=[
+                                    "rgba(38,166,154,0.35)",
+                                    "rgba(23,107,135,0.35)",
+                                    "rgba(16,59,83,0.25)",
+                                    "rgba(217,119,54,0.35)",
+                                ],
+                            ),
+                        )
+                    ]
+                )
+                apply_mhu_layout(fig_sankey, title="Distribuição volumétrica (chuva + recessão)", height=380)
+                chart_container(fig_sankey, filename="sankey_balanco", key="sankey_balanco")
+            except Exception:
+                pass
 
             st.subheader("Volumes acumulados (bacia)")
             df_acum = bal["df_acumulados"]
@@ -2310,6 +2407,7 @@ if pagina == "Balanço Hídrico":
                         y=df_acum["V_prec_acum_m3"],
                         name="Precipitação acum.",
                         mode="lines",
+                        line=dict(color=COLOR_PREC, width=2.2),
                     )
                 )
                 fig_acum.add_trace(
@@ -2318,6 +2416,7 @@ if pagina == "Balanço Hídrico":
                         y=df_acum["V_inf_acum_m3"],
                         name="Infiltração acum.",
                         mode="lines",
+                        line=dict(color=COLOR_INFIL, width=2.2),
                     )
                 )
                 fig_acum.add_trace(
@@ -2326,6 +2425,7 @@ if pagina == "Balanço Hídrico":
                         y=df_acum["V_exutorio_acum_m3"],
                         name="Exutório acum.",
                         mode="lines",
+                        line=dict(color=COLOR_Q, width=2.2),
                     )
                 )
                 fig_acum.add_trace(
@@ -2334,6 +2434,7 @@ if pagina == "Balanço Hídrico":
                         y=df_acum["V_arm_bacia_m3"],
                         name="Armazenamento bacia",
                         mode="lines",
+                        line=dict(color=HYDRO, width=2.2),
                     )
                 )
                 if float(meta_sim["tempo_chuva_s"]) > 0:
@@ -2343,12 +2444,9 @@ if pagina == "Balanço Hídrico":
                         line_color="#888",
                         annotation_text="Fim da chuva",
                     )
-                fig_acum.update_layout(
-                    xaxis_title="Tempo (s)",
-                    yaxis_title="Volume (m3)",
-                    legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
-                )
-                st.plotly_chart(fig_acum, use_container_width=True)
+                apply_mhu_layout(fig_acum, title="Volumes acumulados na bacia")
+                fig_acum.update_layout(xaxis_title="Tempo (s)", yaxis_title="Volume (m³)")
+                chart_container(fig_acum, filename="balanco_acumulados", key="fig_bal_acum")
 
             st.subheader("Distribuição percentual dos componentes")
             fig_dist = px.bar(
@@ -2358,8 +2456,10 @@ if pagina == "Balanço Hídrico":
                 color="Periodo",
                 barmode="group",
                 title="Percentuais em relação à precipitação do período",
+                color_discrete_sequence=[HYDRO, TEAL],
             )
-            st.plotly_chart(fig_dist, use_container_width=True)
+            apply_mhu_layout(fig_dist)
+            chart_container(fig_dist, filename="balanco_distribuicao", key="fig_bal_dist")
 
             st.subheader("Balanço da bacia")
             st.dataframe(bal["df_bacia"], use_container_width=True, hide_index=True)
@@ -2387,7 +2487,9 @@ if pagina == "Balanço Hídrico":
             st.error(f"Erro no diagnóstico de balanço: {exc_bal}")
 
 elif pagina == "Comparação MHU 1.1 × 2.0":
-    st.title("Comparação MHU 1.1 × MHU 2.0")
+    from ui_components import page_header
+
+    page_header("Comparação MHU 1.1 × MHU 2.0")
     st.markdown(
         """
 O **MHU 2.0 (Modo 2)** processa cada classe de uso do solo com armazenamento, infiltração e
@@ -2475,32 +2577,55 @@ da vazão de montante entre classes no Modo 2 segue a hipótese experimental de 
             st.dataframe(cmp_store["resumo"], use_container_width=True, hide_index=True)
             s1 = cmp_store["df_saida_1_1"].copy()
             s2 = cmp_store["df_saida_2_0"].copy()
+            from plot_theme import COLOR_MHU11, COLOR_MHU20, apply_mhu_layout
+            from ui_components import chart_container
+
             fig_cmp = go.Figure()
             fig_cmp.add_trace(
-                go.Scatter(x=s1["Tempo_s"], y=s1["Q_ex_m3_s"], name="Q_ex MHU 1.1", mode="lines")
+                go.Scatter(
+                    x=s1["Tempo_s"],
+                    y=s1["Q_ex_m3_s"],
+                    name="Q_ex MHU 1.1",
+                    mode="lines",
+                    line=dict(color=COLOR_MHU11, width=2.4),
+                    hovertemplate="MHU 1.1: %{y:.4f} m³/s<extra></extra>",
+                )
             )
             fig_cmp.add_trace(
-                go.Scatter(x=s2["Tempo_s"], y=s2["Q_ex_m3_s"], name="Q_ex MHU 2.0", mode="lines")
+                go.Scatter(
+                    x=s2["Tempo_s"],
+                    y=s2["Q_ex_m3_s"],
+                    name="Q_ex MHU 2.0",
+                    mode="lines",
+                    line=dict(color=COLOR_MHU20, width=2.4, dash="dash"),
+                    hovertemplate="MHU 2.0: %{y:.4f} m³/s<extra></extra>",
+                )
             )
-            fig_cmp.update_layout(
-                title="Hidrograma no exutório — mesmos dados de entrada",
-                xaxis_title="Tempo (s)",
-                yaxis_title="Vazão (m³/s)",
-            )
-            st.plotly_chart(fig_cmp, use_container_width=True)
+            apply_mhu_layout(fig_cmp, title="Hidrograma no exutório — mesmos dados de entrada")
+            fig_cmp.update_layout(xaxis_title="Tempo (s)", yaxis_title="Vazão (m³/s)")
+            chart_container(fig_cmp, filename="comparacao_q", key="cmp_q")
             fig_n = go.Figure()
             fig_n.add_trace(
-                go.Scatter(x=s1["Tempo_s"], y=s1["Nivel_m"], name="Nível MHU 1.1", mode="lines")
+                go.Scatter(
+                    x=s1["Tempo_s"],
+                    y=s1["Nivel_m"],
+                    name="Nível MHU 1.1",
+                    mode="lines",
+                    line=dict(color=COLOR_MHU11, width=2.4),
+                )
             )
             fig_n.add_trace(
-                go.Scatter(x=s2["Tempo_s"], y=s2["Nivel_m"], name="Nível MHU 2.0", mode="lines")
+                go.Scatter(
+                    x=s2["Tempo_s"],
+                    y=s2["Nivel_m"],
+                    name="Nível MHU 2.0",
+                    mode="lines",
+                    line=dict(color=COLOR_MHU20, width=2.4, dash="dash"),
+                )
             )
-            fig_n.update_layout(
-                title="Nível no canal — MHU 1.1 × 2.0",
-                xaxis_title="Tempo (s)",
-                yaxis_title="Nível (m)",
-            )
-            st.plotly_chart(fig_n, use_container_width=True)
+            apply_mhu_layout(fig_n, title="Nível no canal — MHU 1.1 × 2.0")
+            fig_n.update_layout(xaxis_title="Tempo (s)", yaxis_title="Nível (m)")
+            chart_container(fig_n, filename="comparacao_nivel", key="cmp_n")
             st.download_button(
                 "Baixar Excel da comparação",
                 data=montar_excel_resultados(
@@ -2514,11 +2639,13 @@ da vazão de montante entre classes no Modo 2 segue a hipótese experimental de 
                 key="dl_cmp_mhu",
             )
 
-elif pagina == "Sugestão de calibração":
-    st.title("Sugestão de calibração")
-    st.caption(
-        "Valores de referência para **infiltração (mm/h)** e **Manning (n)** na superfície (US) e **n do canal**. "
-        "São ordens de magnitude para eventos urbanos; calibre com dados locais e validação."
+elif pagina == "Calibração":
+    from ui_components import page_header
+
+    page_header(
+        "Calibração",
+        "Valores de referência para infiltração (mm/h) e Manning (n) na superfície (US) e n do canal. "
+        "Ordens de magnitude para eventos urbanos — calibre com dados locais e validação.",
     )
     st.info(
         "Use estas tabelas como **ponto de partida** na aba **Simulação** (campos US e `n_canal`). "
@@ -2572,7 +2699,9 @@ elif pagina == "Sugestão de calibração":
     )
 
 elif pagina == "Instruções":
-    st.title("Instruções de uso")
+    from ui_components import page_header
+
+    page_header("Instruções de uso")
     st.markdown(
         """
 ### Fluxo recomendado
@@ -2600,9 +2729,10 @@ elif pagina == "Instruções":
         """
     )
 
-elif pagina == "Descrição das variáveis":
-    st.title("Descrição das variáveis e termos")
-    st.caption("Tabela de referência alinhada à metodologia do modelo.")
+elif pagina == "Glossário de variáveis":
+    from ui_components import page_header
+
+    page_header("Glossário de variáveis", "Tabela de referência alinhada à metodologia do modelo.")
     st.dataframe(
         pd.DataFrame(GLOSSARIO_ROWS),
         use_container_width=True,
@@ -2610,8 +2740,9 @@ elif pagina == "Descrição das variáveis":
     )
 
 elif pagina == "Simulações salvas":
-    st.title("Simulações salvas")
-    st.caption("Carregue, exclua e reutilize simulações anteriores.")
+    from ui_components import page_header
+
+    page_header("Simulações salvas", "Carregue, exclua e reutilize simulações anteriores.")
 
     store = st.session_state.get("sim_store", {"last_id": None, "items": []})
     items = store.get("items", [])
@@ -2641,16 +2772,18 @@ elif pagina == "Simulações salvas":
                     st.rerun()
 
 elif pagina == "Validação":
-    st.title("Validação: nível observado vs simulado")
-    st.caption(
+    from ui_components import page_header
+
+    page_header(
+        "Validação: nível observado vs simulado",
         "Compare níveis medidos em campo com a série simulada no exutório. "
-        "O Nash-Sutcliffe (NSE) é o mesmo indicador frequentemente chamado de Nash."
+        "Indicadores elevados não classificam automaticamente o modelo como validado.",
     )
 
     df_sim = st.session_state.get("df_saida_validacao")
     if df_sim is None:
         st.warning(
-            "Nenhuma simulação disponível. Vá em **Simulação**, preencha os dados e clique em **Rodar simulação**."
+            "Nenhuma simulação disponível. Vá em **Nova simulação**, preencha os dados e clique em **Rodar simulação**."
         )
     else:
         st.info(
@@ -2761,13 +2894,67 @@ elif pagina == "Validação":
                 err_mae = mae(obs, sim)
                 vb = vies_medio(obs, sim)
 
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("NSE (Nash-Sutcliffe)", f"{nse:.4f}")
-                m2.metric("R2 (Pearson)", f"{r2:.4f}")
-                m3.metric("RMSE (m)", f"{err_rmse:.4f}")
-                m4.metric("MAE (m)", f"{err_mae:.4f}")
-                st.metric("Vies medio (sim - obs) (m)", f"{vb:.4f}")
-                st.caption("Viés médio: média de (simulado - observado) nos passos com observação.")
+                from ui_components import metric_cards, chart_container
+                from plot_theme import COLOR_OBS, COLOR_SIM, apply_mhu_layout, annotate_peak
+
+                metric_cards(
+                    [
+                        {"label": "NSE (Nash-Sutcliffe)", "value": f"{nse:.4f}"},
+                        {"label": "R² (Pearson)", "value": f"{r2:.4f}"},
+                        {"label": "RMSE", "value": f"{err_rmse:.4f}", "unit": "m"},
+                        {"label": "MAE", "value": f"{err_mae:.4f}", "unit": "m"},
+                        {"label": "Viés médio (sim − obs)", "value": f"{vb:.4f}", "unit": "m"},
+                    ]
+                )
+                st.caption(
+                    "Viés médio: média de (simulado − observado) nos passos com observação. "
+                    "Indicadores elevados **não** classificam automaticamente o modelo como validado."
+                )
+
+                df_cmp = df_obs.loc[mask, ["Tempo_s", "Nivel_obs_m", "Nivel_sim_m"]].copy()
+                fig_val = go.Figure()
+                fig_val.add_trace(
+                    go.Scatter(
+                        x=df_cmp["Tempo_s"],
+                        y=df_cmp["Nivel_sim_m"],
+                        name="Nível simulado",
+                        mode="lines",
+                        line=dict(color=COLOR_SIM, width=2.4),
+                        hovertemplate="Sim: %{y:.4f} m<extra></extra>",
+                    )
+                )
+                fig_val.add_trace(
+                    go.Scatter(
+                        x=df_cmp["Tempo_s"],
+                        y=df_cmp["Nivel_obs_m"],
+                        name="Nível observado",
+                        mode="markers+lines",
+                        line=dict(color=COLOR_OBS, width=1.5, dash="dot"),
+                        marker=dict(size=7, color=COLOR_OBS),
+                        hovertemplate="Obs: %{y:.4f} m<extra></extra>",
+                    )
+                )
+                apply_mhu_layout(fig_val, title="Nível observado vs simulado")
+                chart_container(fig_val, filename="validacao_nivel", key="fig_val_nivel")
+
+                pico_obs = float(np.nanmax(obs))
+                pico_sim = float(np.nanmax(sim))
+                fig_picos = go.Figure(
+                    data=[
+                        go.Bar(
+                            x=["Observado", "Simulado"],
+                            y=[pico_obs, pico_sim],
+                            marker_color=[COLOR_OBS, COLOR_SIM],
+                            text=[f"{pico_obs:.3f} m", f"{pico_sim:.3f} m"],
+                            textposition="outside",
+                            hovertemplate="%{x}: %{y:.4f} m<extra></extra>",
+                        )
+                    ]
+                )
+                apply_mhu_layout(fig_picos, title="Comparação dos picos de nível", height=360)
+                chart_container(fig_picos, filename="validacao_picos", key="fig_val_picos")
+                st.subheader("Tabela detalhada de comparação")
+                st.dataframe(df_cmp.reset_index(drop=True), use_container_width=True, hide_index=True)
 
             st.divider()
             st.subheader("Calibração automática (grade Horton)")
@@ -2972,10 +3159,12 @@ elif pagina == "Validação":
                 help="Disponível após informar pelo menos 2 níveis observados válidos.",
             )
 
-else:
-    st.title("Modelo Hidrológico Urbano - Escoamento e Nível no Canal")
-    st.caption(
-        "MHU 1.1 preservado (Modo 1) · MHU 2.0 experimental (Modo 2, por classe de uso do solo)."
+elif pagina == "Nova simulação":
+    from ui_components import page_header
+
+    page_header(
+        "Nova simulação",
+        "MHU 1.1 preservado (Modo 1) · MHU 2.0 experimental (Modo 2, por classe de uso do solo).",
     )
 
     # Defaults (ou ultimo salvo carregado)
@@ -3027,8 +3216,25 @@ else:
         st.info("Campos da simulação limpos. Preencha novamente para iniciar do zero.")
         st.session_state["_show_clear_notice"] = False
 
-    with st.sidebar:
-        st.header("Configuração")
+    from ui_components import chart_container, fig_canal_secao, info_card
+
+    tab_evt, tab_canal, tab_ac, tab_us, tab_chuva, tab_run = st.tabs(
+        [
+            "1. Evento",
+            "2. Canal",
+            "3. Áreas de contribuição",
+            "4. Uso do solo",
+            "5. Precipitação",
+            "6. Revisão e execução",
+        ]
+    )
+
+    with tab_evt:
+        info_card(
+            "Configuração do evento",
+            "Defina formulação hidrológica, discretização temporal e opções de infiltração. "
+            "Os valores permanecem em session_state ao navegar entre as etapas.",
+        )
         modo_mhu = st.radio(
             "Formulação hidrológica",
             options=[MODO_MHU_1_1, MODO_MHU_2_0],
@@ -3038,6 +3244,7 @@ else:
                 else "Modo 2 — MHU 2.0 (processamento por classe US)"
             ),
             key="modo_mhu",
+            horizontal=True,
             help=(
                 "Modo 1 preserva o MHU 1.1. Modo 2 é experimental: cada classe US tem "
                 "armazenamento, infiltração e vazão próprios (mudança de concepção matemática)."
@@ -3048,56 +3255,62 @@ else:
                 "MHU 2.0: Q_i = Σ Q_ij · W_ij = A_ij/L_i · hipótese experimental de mistura "
                 "homogênea para Q de montante (proporcional à área)."
             )
-        intervalo_registro_s = st.number_input(
-            "Intervalo de registro da chuva (s)",
-            min_value=5,
-            step=5,
-            key="intervalo_registro_s",
-            help="Espaçamento temporal dos registros de precipitação (ex.: 600 s).",
-        )
+        c_a, c_b, c_c = st.columns(3)
+        with c_a:
+            intervalo_registro_s = st.number_input(
+                "Intervalo de registro da chuva (s)",
+                min_value=5,
+                step=5,
+                key="intervalo_registro_s",
+                help="Espaçamento temporal dos registros de precipitação (ex.: 600 s).",
+            )
         opcoes_dt = passos_integracao_validos(int(intervalo_registro_s))
-        if not opcoes_dt:
-            st.error(
-                "Nenhum passo de integração permitido divide o intervalo de registro. "
-                f"Use um intervalo múltiplo de: {', '.join(str(x) for x in PASSOS_INTEGRACAO_PERMITIDOS)}."
-            )
-            dt_integracao_s = int(intervalo_registro_s)
-        else:
-            atual_dt = int(st.session_state.get("dt_integracao_s", opcoes_dt[0]))
-            if atual_dt not in opcoes_dt:
-                st.session_state["dt_integracao_s"] = opcoes_dt[0]
-            dt_integracao_s = st.selectbox(
-                "Passo de integração numérica (s)",
-                options=opcoes_dt,
-                key="dt_integracao_s",
-                help="Passo interno do modelo; deve dividir o intervalo de registro.",
-            )
+        with c_b:
+            if not opcoes_dt:
+                st.error(
+                    "Nenhum passo de integração permitido divide o intervalo de registro. "
+                    f"Use um intervalo múltiplo de: {', '.join(str(x) for x in PASSOS_INTEGRACAO_PERMITIDOS)}."
+                )
+                dt_integracao_s = int(intervalo_registro_s)
+            else:
+                atual_dt = int(st.session_state.get("dt_integracao_s", opcoes_dt[0]))
+                if atual_dt not in opcoes_dt:
+                    st.session_state["dt_integracao_s"] = opcoes_dt[0]
+                dt_integracao_s = st.selectbox(
+                    "Passo de integração numérica (s)",
+                    options=opcoes_dt,
+                    key="dt_integracao_s",
+                    help="Passo interno do modelo; deve dividir o intervalo de registro.",
+                )
         st.session_state["dt_seg"] = int(dt_integracao_s)
         dt_seg = int(dt_integracao_s)
-
-        duracao_min = st.number_input("Duração da chuva (min)", min_value=5, step=5, key="duracao_min")
-        tempo_recessao_min = st.number_input(
-            "Tempo de recessão após a chuva (min)",
-            min_value=0.0,
-            step=5.0,
-            key="tempo_recessao_min",
-            help="Período adicional com precipitação zero para avaliar a recessão.",
-        )
-        unidade_chuva = st.radio(
-            "Unidade da precipitação",
-            options=[UNIDADE_CHUVA_INTENSIDADE, UNIDADE_CHUVA_ACUMULADA],
-            format_func=lambda u: (
-                "Intensidade (mm/h)" if u == UNIDADE_CHUVA_INTENSIDADE else "Acumulado por intervalo (mm)"
-            ),
-            key="unidade_chuva",
-            horizontal=False,
-        )
-        st.divider()
+        with c_c:
+            duracao_min = st.number_input("Duração da chuva (min)", min_value=5, step=5, key="duracao_min")
+        c_d, c_e = st.columns(2)
+        with c_d:
+            tempo_recessao_min = st.number_input(
+                "Tempo de recessão após a chuva (min)",
+                min_value=0.0,
+                step=5.0,
+                key="tempo_recessao_min",
+                help="Período adicional com precipitação zero para avaliar a recessão.",
+            )
+        with c_e:
+            unidade_chuva = st.radio(
+                "Unidade da precipitação",
+                options=[UNIDADE_CHUVA_INTENSIDADE, UNIDADE_CHUVA_ACUMULADA],
+                format_func=lambda u: (
+                    "Intensidade (mm/h)" if u == UNIDADE_CHUVA_INTENSIDADE else "Acumulado por intervalo (mm)"
+                ),
+                key="unidade_chuva",
+                horizontal=True,
+            )
         usar_horton = st.checkbox("Usar infiltração variável (Horton)", key="usar_horton")
         if usar_horton:
             st.caption("Modo avançado de infiltração para calibração.")
-            horton_k_h_inv = st.number_input("k de Horton (1/h)", min_value=0.0, step=0.1, key="horton_k_h_inv")
-            horton_f0_multiplicador = st.number_input(
+            h1, h2 = st.columns(2)
+            horton_k_h_inv = h1.number_input("k de Horton (1/h)", min_value=0.0, step=0.1, key="horton_k_h_inv")
+            horton_f0_multiplicador = h2.number_input(
                 "f0/fc de Horton", min_value=1.0, step=0.1, key="horton_f0_multiplicador"
             )
         else:
@@ -3111,327 +3324,307 @@ else:
         tempo_chuva_s = (n_registros - 1) * float(intervalo_registro_s)
         tempo_total_s = tempo_chuva_s + float(tempo_recessao_min) * 60.0
         n_passos_int = int(round(tempo_total_s / float(dt_integracao_s))) + 1
-        st.write(f"Registros de chuva: {n_registros} (inclui t=0)")
-        st.write(f"Passos de integração: {n_passos_int} (inclui t=0 como CI)")
+        m_a, m_b, m_c = st.columns(3)
+        m_a.metric("Registros de chuva", f"{n_registros} (inclui t=0)")
+        m_b.metric("Passos de integração", f"{n_passos_int} (inclui CI)")
+        m_c.metric("Horizonte total", f"{tempo_total_s/60:.1f} min")
         st.caption(
             "t=0 = condições iniciais. Cada registro no fim do intervalo representa a chuva do intervalo anterior."
         )
 
-    st.subheader("1) Parâmetros do canal")
-    col1, col2, col3, col4 = st.columns(4)
-    b_canal = col1.number_input("B_canal (m)", min_value=0.1, key="b_canal")
-    s_canal = col2.number_input("S_canal (m/m)", min_value=0.0001, format="%.4f", key="s_canal")
-    n_canal = col3.number_input("n_canal", min_value=0.001, format="%.3f", key="n_canal")
-    nivel_base = col4.number_input("Nivel base (m)", format="%.3f", key="nivel_base")
-
-    st.subheader("2) Áreas de contribuição (AC)")
-    st.caption(
-        "Rede convergente: cada AC (exceto o exutório) deve ter um único destino a jusante. "
-        "A transferência de vazão entre ACs no mesmo passo interno é uma aproximação de "
-        "reservatórios conectados, não uma hidráulica explícita dos canais de ligação."
-    )
-    n_ac = st.number_input("Número de ACs", min_value=1, max_value=20, step=1, key="n_ac")
-    exutorio_id = st.number_input("ID da AC de exutório", min_value=1, max_value=20, step=1, key="exutorio_id")
-
-    # Padrao convergente: ACs 1..n-1 → exutorio n (sem bifurcacao da mesma vazao)
-    exut_padrao = int(n_ac)
-    rows_ac_default = []
-    for idx in range(1, int(n_ac) + 1):
-        if idx == 1:
-            area, L, S, infil, n_eq = 85000.0, 350.0, 0.015, 12.0, 0.12
-        elif idx == 2:
-            area, L, S, infil, n_eq = 92000.0, 420.0, 0.012, 10.0, 0.10
-        elif idx == 3:
-            area, L, S, infil, n_eq = 130000.0, 500.0, 0.010, 8.0, 0.09
-        else:
-            area, L, S, infil, n_eq = 100000.0, 400.0, 0.01, 10.0, 0.1
-        if idx == exut_padrao:
-            montantes = ";".join(str(i) for i in range(1, exut_padrao)) if exut_padrao > 1 else "0"
-        else:
-            montantes = "0"
-        rows_ac_default.append(
-            {
-                "ID_AC": idx,
-                "Area_m2": area,
-                "L_m": L,
-                "S_m_m": S,
-                "ACs_montante_ids": montantes,
-                "h0_m": 0.0,
-                "Infiltracao_eq_mm_h": infil,
-                "n_eq": n_eq,
-            }
+    with tab_canal:
+        info_card(
+            "Parâmetros hidráulicos do canal",
+            "Seção retangular no exutório. O esquema abaixo é apenas visual e usa o nível da última simulação, se houver.",
         )
-    default_ac = pd.DataFrame(rows_ac_default)
-    ac_df_edit = default_ac.copy()
-    ac_loaded = st.session_state.get("ac_df_loaded")
-    if isinstance(ac_loaded, pd.DataFrame) and not ac_loaded.empty:
-        ac_df_edit = ac_loaded.copy().head(n_ac)
-
-    ac_df = st.data_editor(
-        ac_df_edit,
-        num_rows="fixed",
-        use_container_width=True,
-        hide_index=True,
-        key="editor_ac",
-    )
-
-    try:
-        _ac_ord_ui, rede_ui = validar_e_preparar_rede_ac(ac_df, int(exutorio_id))
-        st.success(
-            f"Rede válida: {rede_ui['n_ac']} ACs contribuem ao exutório {rede_ui['exutorio_id']} "
-            f"sem bifurcação de vazão (ordenação montante→jusante: {rede_ui['ordem_ids']})."
+        col1, col2, col3, col4 = st.columns(4)
+        b_canal = col1.number_input("B_canal (m)", min_value=0.1, key="b_canal")
+        s_canal = col2.number_input("S_canal (m/m)", min_value=0.0001, format="%.4f", key="s_canal")
+        n_canal = col3.number_input("n_canal", min_value=0.001, format="%.3f", key="n_canal")
+        nivel_base = col4.number_input("Nível base (m)", format="%.3f", key="nivel_base")
+        _df_prev = st.session_state.get("df_saida_validacao")
+        _y_prev = float(_df_prev["Nivel_m"].max()) if isinstance(_df_prev, pd.DataFrame) and not _df_prev.empty else 0.0
+        chart_container(
+            fig_canal_secao(float(b_canal), nivel_m=_y_prev, nivel_base=float(nivel_base)),
+            filename="secao_canal",
+            key="fig_secao_canal",
         )
-        st.plotly_chart(fig_rede_conectividade_ac(rede_ui), use_container_width=True)
-    except Exception as exc_rede:
-        st.error(str(exc_rede))
 
-    st.subheader("3) Unidades de uso do solo (US) - editável")
-    if modo_mhu == MODO_MHU_1_1:
-        usar_us_para_eq = st.checkbox(
-            "Calcular Infiltracao_eq_mm_h e n_eq automaticamente a partir das US",
-            key="usar_us_para_eq",
+    with tab_ac:
+        st.caption(
+            "Rede convergente: cada AC (exceto o exutório) deve ter um único destino a jusante. "
+            "A transferência de vazão entre ACs no mesmo passo interno é uma aproximação de "
+            "reservatórios conectados, não uma hidráulica explícita dos canais de ligação."
         )
-    else:
-        usar_us_para_eq = False
-        st.info(
-            "Modo 2 (MHU 2.0): cada classe US tem área, Manning, infiltração, armazenamento, "
-            "lâmina e vazão próprios. **Não** se calcula média aritmética de Manning. "
-            "A vazão da AC é a soma das vazões das classes."
-        )
-    classes_padrao = ["Superfície impermeável", "Gramado", "Vegetação arbórea"]
-    rows_us = []
-    for ac_id in range(1, int(n_ac) + 1):
-        if ac_id == 1:
-            areas = [34000.0, 28000.0, 23000.0]
-        elif ac_id == 2:
-            areas = [46000.0, 25000.0, 21000.0]
-        elif ac_id == 3:
-            areas = [78000.0, 31000.0, 21000.0]
-        else:
-            area_ac = float(ac_df.loc[ac_df["ID_AC"] == ac_id, "Area_m2"].iloc[0])
-            areas = [0.6 * area_ac, 0.25 * area_ac, 0.15 * area_ac]
-        for idx, classe in enumerate(classes_padrao, start=1):
-            rows_us.append(
+        n1, n2 = st.columns(2)
+        n_ac = n1.number_input("Número de ACs", min_value=1, max_value=20, step=1, key="n_ac")
+        exutorio_id = n2.number_input("ID da AC de exutório", min_value=1, max_value=20, step=1, key="exutorio_id")
+
+        # Padrao convergente: ACs 1..n-1 → exutorio n (sem bifurcacao da mesma vazao)
+        exut_padrao = int(n_ac)
+        rows_ac_default = []
+        for idx in range(1, int(n_ac) + 1):
+            if idx == 1:
+                area, L, S, infil, n_eq = 85000.0, 350.0, 0.015, 12.0, 0.12
+            elif idx == 2:
+                area, L, S, infil, n_eq = 92000.0, 420.0, 0.012, 10.0, 0.10
+            elif idx == 3:
+                area, L, S, infil, n_eq = 130000.0, 500.0, 0.010, 8.0, 0.09
+            else:
+                area, L, S, infil, n_eq = 100000.0, 400.0, 0.01, 10.0, 0.1
+            if idx == exut_padrao:
+                montantes = ";".join(str(i) for i in range(1, exut_padrao)) if exut_padrao > 1 else "0"
+            else:
+                montantes = "0"
+            rows_ac_default.append(
                 {
-                    "ID_AC": ac_id,
-                    "ID_US": idx,
-                    "Classe_US": classe,
-                    "Area_US_m2": areas[idx - 1],
-                    "Infiltracao_US_mm_h": [1.0, 15.0, 30.0][idx - 1],
-                    "n_US": [0.015, 0.20, 0.35][idx - 1],
+                    "ID_AC": idx,
+                    "Area_m2": area,
+                    "L_m": L,
+                    "S_m_m": S,
+                    "ACs_montante_ids": montantes,
+                    "h0_m": 0.0,
+                    "Infiltracao_eq_mm_h": infil,
+                    "n_eq": n_eq,
                 }
             )
-    us_default_df = pd.DataFrame(rows_us)
-    us_loaded = st.session_state.get("us_df_loaded")
-    if isinstance(us_loaded, pd.DataFrame) and not us_loaded.empty:
-        us_default_df = us_loaded.copy()
-    us_df = st.data_editor(
-        us_default_df,
-        num_rows="dynamic",
-        use_container_width=True,
-        hide_index=True,
-        key="editor_us",
-    )
+        default_ac = pd.DataFrame(rows_ac_default)
+        ac_df_edit = default_ac.copy()
+        ac_loaded = st.session_state.get("ac_df_loaded")
+        if isinstance(ac_loaded, pd.DataFrame) and not ac_loaded.empty:
+            ac_df_edit = ac_loaded.copy().head(n_ac)
 
-    from mhu_modo2 import verificar_consistencia_areas_us, normalizar_areas_us_proporcional
+        ac_df = st.data_editor(
+            ac_df_edit,
+            num_rows="fixed",
+            use_container_width=True,
+            hide_index=True,
+            key="editor_ac",
+        )
 
-    df_areas_check = verificar_consistencia_areas_us(ac_df, us_df)
-    st.subheader("Consistência de áreas (AC × soma das US)")
-    st.dataframe(df_areas_check, use_container_width=True, hide_index=True)
-    areas_ok = bool(df_areas_check["Consistente"].all()) if not df_areas_check.empty else False
-    us_df_run = us_df.copy()
-    if areas_ok:
-        st.success("Soma das áreas das classes US coincide com a área de cada AC.")
-    elif modo_mhu == MODO_MHU_2_0:
-        st.error(
-            "Diferença entre área da AC e soma das classes US. "
-            "No Modo 2, corrija as áreas ou autorize explicitamente a normalização proporcional. "
-            "Não há normalização silenciosa."
+        try:
+            _ac_ord_ui, rede_ui = validar_e_preparar_rede_ac(ac_df, int(exutorio_id))
+            st.success(
+                f"Rede válida: {rede_ui['n_ac']} ACs contribuem ao exutório {rede_ui['exutorio_id']} "
+                f"sem bifurcação de vazão (ordenação montante→jusante: {rede_ui['ordem_ids']})."
+            )
+            from plot_theme import apply_mhu_layout
+            from ui_components import chart_container as _cc
+
+            _fig_rede = fig_rede_conectividade_ac(rede_ui)
+            apply_mhu_layout(_fig_rede, title="Rede de ACs")
+            _cc(_fig_rede, filename="rede_acs", key="fig_rede_acs")
+        except Exception as exc_rede:
+            st.error(str(exc_rede))
+
+    with tab_us:
+        if modo_mhu == MODO_MHU_1_1:
+            usar_us_para_eq = st.checkbox(
+                "Calcular Infiltracao_eq_mm_h e n_eq automaticamente a partir das US",
+                key="usar_us_para_eq",
+            )
+        else:
+            usar_us_para_eq = False
+            st.info(
+                "Modo 2 (MHU 2.0): cada classe US tem área, Manning, infiltração, armazenamento, "
+                "lâmina e vazão próprios. **Não** se calcula média aritmética de Manning. "
+                "A vazão da AC é a soma das vazões das classes."
+            )
+        classes_padrao = ["Superfície impermeável", "Gramado", "Vegetação arbórea"]
+        rows_us = []
+        for ac_id in range(1, int(n_ac) + 1):
+            if ac_id == 1:
+                areas = [34000.0, 28000.0, 23000.0]
+            elif ac_id == 2:
+                areas = [46000.0, 25000.0, 21000.0]
+            elif ac_id == 3:
+                areas = [78000.0, 31000.0, 21000.0]
+            else:
+                area_ac = float(ac_df.loc[ac_df["ID_AC"] == ac_id, "Area_m2"].iloc[0])
+                areas = [0.6 * area_ac, 0.25 * area_ac, 0.15 * area_ac]
+            for idx, classe in enumerate(classes_padrao, start=1):
+                rows_us.append(
+                    {
+                        "ID_AC": ac_id,
+                        "ID_US": idx,
+                        "Classe_US": classe,
+                        "Area_US_m2": areas[idx - 1],
+                        "Infiltracao_US_mm_h": [1.0, 15.0, 30.0][idx - 1],
+                        "n_US": [0.015, 0.20, 0.35][idx - 1],
+                    }
+                )
+        us_default_df = pd.DataFrame(rows_us)
+        us_loaded = st.session_state.get("us_df_loaded")
+        if isinstance(us_loaded, pd.DataFrame) and not us_loaded.empty:
+            us_default_df = us_loaded.copy()
+        us_df = st.data_editor(
+            us_default_df,
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            key="editor_us",
         )
-        autorizar_norm = st.checkbox(
-            "Autorizo normalização proporcional das áreas US à área da AC",
-            key="autorizar_norm_areas_us",
-        )
-        if autorizar_norm:
-            us_df_run = normalizar_areas_us_proporcional(ac_df, us_df)
-            st.warning("Áreas US serão normalizadas proporcionalmente nesta execução.")
+
+        from mhu_modo2 import verificar_consistencia_areas_us, normalizar_areas_us_proporcional
+
+        df_areas_check = verificar_consistencia_areas_us(ac_df, us_df)
+        st.subheader("Consistência de áreas (AC × soma das US)")
+        st.dataframe(df_areas_check, use_container_width=True, hide_index=True)
+        areas_ok = bool(df_areas_check["Consistente"].all()) if not df_areas_check.empty else False
+        us_df_run = us_df.copy()
+        if areas_ok:
+            st.success("Soma das áreas das classes US coincide com a área de cada AC.")
+        elif modo_mhu == MODO_MHU_2_0:
+            st.error(
+                "Diferença entre área da AC e soma das classes US. "
+                "No Modo 2, corrija as áreas ou autorize explicitamente a normalização proporcional. "
+                "Não há normalização silenciosa."
+            )
+            autorizar_norm = st.checkbox(
+                "Autorizo normalização proporcional das áreas US à área da AC",
+                key="autorizar_norm_areas_us",
+            )
+            if autorizar_norm:
+                us_df_run = normalizar_areas_us_proporcional(ac_df, us_df)
+                st.warning("Áreas US serão normalizadas proporcionalmente nesta execução.")
+                st.dataframe(
+                    verificar_consistencia_areas_us(ac_df, us_df_run),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+        else:
+            st.warning(
+                "Há diferença entre área da AC e soma das US (ver erros abs./%). "
+                "No Modo 1 isso afeta apenas a ponderação dos equivalentes; no Modo 2 seria bloqueante."
+            )
+
+        if modo_mhu == MODO_MHU_1_1 and usar_us_para_eq:
+            ac_preview = calcular_parametros_equivalentes_por_us(ac_df, us_df_run)
+            st.caption("Parâmetros equivalentes calculados por US (ponderados pela área da AC) — apenas Modo 1.")
             st.dataframe(
-                verificar_consistencia_areas_us(ac_df, us_df_run),
+                ac_preview[["ID_AC", "Infiltracao_eq_mm_h", "n_eq"]],
                 use_container_width=True,
                 hide_index=True,
             )
-    else:
-        st.warning(
-            "Há diferença entre área da AC e soma das US (ver erros abs./%). "
-            "No Modo 1 isso afeta apenas a ponderação dos equivalentes; no Modo 2 seria bloqueante."
-        )
+        else:
+            ac_preview = ac_df.copy()
+            if modo_mhu == MODO_MHU_2_0:
+                if "Infiltracao_eq_mm_h" not in ac_preview.columns:
+                    ac_preview["Infiltracao_eq_mm_h"] = 0.0
+                if "n_eq" not in ac_preview.columns:
+                    ac_preview["n_eq"] = 0.1
 
-    if modo_mhu == MODO_MHU_1_1 and usar_us_para_eq:
-        ac_preview = calcular_parametros_equivalentes_por_us(ac_df, us_df_run)
-        st.caption("Parâmetros equivalentes calculados por US (ponderados pela área da AC) — apenas Modo 1.")
-        st.dataframe(
-            ac_preview[["ID_AC", "Infiltracao_eq_mm_h", "n_eq"]],
+    with tab_chuva:
+        st.caption(
+            "Unidade definida na etapa Evento. O valor no fim de cada intervalo de registro "
+            "representa a precipitação ocorrida no intervalo anterior. Em t=0 não há avanço do balanço."
+        )
+        c_t1, c_t2 = st.columns(2)
+        hora_inicio_str = c_t1.text_input("Horário de início do evento (HH:MM)", key="hora_inicio_evento")
+        hora_fim_str = c_t2.text_input("Horário de término do evento (HH:MM)", key="hora_fim_evento")
+        horario_ok = True
+        try:
+            inicio_h, inicio_m = [int(x) for x in hora_inicio_str.split(":")]
+            fim_h, fim_m = [int(x) for x in hora_fim_str.split(":")]
+            t_ini = datetime(2000, 1, 1, inicio_h, inicio_m)
+            t_fim = datetime(2000, 1, 1, fim_h, fim_m)
+            if t_fim < t_ini:
+                t_fim = t_fim + timedelta(days=1)
+            duracao_horario_min = int((t_fim - t_ini).total_seconds() / 60)
+            duracao_modelo_min = int(tempo_chuva_s / 60)
+            if duracao_horario_min != duracao_modelo_min:
+                st.warning(
+                    f"Duração por horário ({duracao_horario_min} min) difere da duração da chuva no modelo "
+                    f"({duracao_modelo_min} min). O eixo será discretizado pelo passo de integração a partir do início."
+                )
+        except Exception:
+            horario_ok = False
+            st.error("Formato de horário inválido. Use HH:MM, ex.: 12:00.")
+
+        tempo_vec = np.arange(n_registros) * float(intervalo_registro_s)
+        col_chuva = "P_mm" if unidade_chuva == UNIDADE_CHUVA_ACUMULADA else "P_mm_h"
+        default_chuva = np.zeros(n_registros)
+        if n_registros >= 5:
+            if unidade_chuva == UNIDADE_CHUVA_ACUMULADA:
+                default_chuva[1:5] = np.array([18, 42, 25, 8], dtype=float) * float(intervalo_registro_s) / 3600.0
+            else:
+                default_chuva[1:5] = [18, 42, 25, 8]
+        chuva_df = pd.DataFrame(
+            {"Passo": np.arange(n_registros), "Tempo_s": tempo_vec, col_chuva: default_chuva}
+        )
+        if st.session_state.get("_editor_chuva_unidade") != unidade_chuva:
+            st.session_state.pop("editor_chuva", None)
+            st.session_state["_editor_chuva_unidade"] = unidade_chuva
+        if st.session_state.get("_editor_chuva_nreg") != n_registros:
+            st.session_state.pop("editor_chuva", None)
+            st.session_state["_editor_chuva_nreg"] = n_registros
+        if st.session_state.get("_editor_chuva_dtreg") != int(intervalo_registro_s):
+            st.session_state.pop("editor_chuva", None)
+            st.session_state["_editor_chuva_dtreg"] = int(intervalo_registro_s)
+
+        chuva_loaded = st.session_state.get("chuva_df_loaded")
+        if isinstance(chuva_loaded, pd.DataFrame) and not chuva_loaded.empty:
+            chuva_loaded = chuva_loaded.copy()
+            src_col = None
+            if col_chuva in chuva_loaded.columns:
+                src_col = col_chuva
+            elif "P_mm_h" in chuva_loaded.columns:
+                src_col = "P_mm_h"
+            elif "P_mm" in chuva_loaded.columns:
+                src_col = "P_mm"
+            if src_col is not None:
+                chuva_df[col_chuva] = np.nan
+                n_copy = min(len(chuva_df), len(chuva_loaded))
+                vals_src = pd.to_numeric(chuva_loaded.iloc[:n_copy][src_col], errors="coerce").to_numpy()
+                if src_col != col_chuva and src_col == "P_mm_h" and col_chuva == "P_mm":
+                    vals_src = vals_src * float(intervalo_registro_s) / 3600.0
+                elif src_col != col_chuva and src_col == "P_mm" and col_chuva == "P_mm_h":
+                    vals_src = vals_src * 3600.0 / max(float(intervalo_registro_s), 1e-12)
+                chuva_df.loc[: n_copy - 1, col_chuva] = vals_src
+        chuva_df_edit = st.data_editor(
+            chuva_df,
+            num_rows="fixed",
             use_container_width=True,
             hide_index=True,
+            disabled=["Passo", "Tempo_s"],
+            key="editor_chuva",
         )
-    else:
-        ac_preview = ac_df.copy()
-        if modo_mhu == MODO_MHU_2_0:
-            # Mantém colunas de eq. para compatibilidade de payload/UI; não usadas no Modo 2.
-            if "Infiltracao_eq_mm_h" not in ac_preview.columns:
-                ac_preview["Infiltracao_eq_mm_h"] = 0.0
-            if "n_eq" not in ac_preview.columns:
-                ac_preview["n_eq"] = 0.1
 
-    st.subheader("4) Chuva")
-    st.caption(
-        "Unidade selecionada na barra lateral. O valor no fim de cada intervalo de registro "
-        "representa a precipitação ocorrida no intervalo anterior. Em t=0 não há avanço do balanço."
-    )
-    c_t1, c_t2 = st.columns(2)
-    hora_inicio_str = c_t1.text_input("Horário de início do evento (HH:MM)", key="hora_inicio_evento")
-    hora_fim_str = c_t2.text_input("Horário de término do evento (HH:MM)", key="hora_fim_evento")
-    horario_ok = True
-    try:
-        inicio_h, inicio_m = [int(x) for x in hora_inicio_str.split(":")]
-        fim_h, fim_m = [int(x) for x in hora_fim_str.split(":")]
-        t_ini = datetime(2000, 1, 1, inicio_h, inicio_m)
-        t_fim = datetime(2000, 1, 1, fim_h, fim_m)
-        if t_fim < t_ini:
-            t_fim = t_fim + timedelta(days=1)
-        duracao_horario_min = int((t_fim - t_ini).total_seconds() / 60)
-        duracao_modelo_min = int(tempo_chuva_s / 60)
-        if duracao_horario_min != duracao_modelo_min:
-            st.warning(
-                f"Duração por horário ({duracao_horario_min} min) difere da duração da chuva no modelo "
-                f"({duracao_modelo_min} min). O eixo será discretizado pelo passo de integração a partir do início."
-            )
-    except Exception:
-        horario_ok = False
-        st.error("Formato de horário inválido. Use HH:MM, ex.: 12:00.")
-
-    tempo_vec = np.arange(n_registros) * float(intervalo_registro_s)
-    col_chuva = "P_mm" if unidade_chuva == UNIDADE_CHUVA_ACUMULADA else "P_mm_h"
-    default_chuva = np.zeros(n_registros)
-    if n_registros >= 5:
-        if unidade_chuva == UNIDADE_CHUVA_ACUMULADA:
-            # Equivalente volumétrico aos defaults legados em mm/h no intervalo de registro
-            default_chuva[1:5] = np.array([18, 42, 25, 8], dtype=float) * float(intervalo_registro_s) / 3600.0
-        else:
-            default_chuva[1:5] = [18, 42, 25, 8]
-    chuva_df = pd.DataFrame(
-        {"Passo": np.arange(n_registros), "Tempo_s": tempo_vec, col_chuva: default_chuva}
-    )
-    # Evita cache do data_editor com coluna/unidade ou numero de registros desatualizados
-    if st.session_state.get("_editor_chuva_unidade") != unidade_chuva:
-        st.session_state.pop("editor_chuva", None)
-        st.session_state["_editor_chuva_unidade"] = unidade_chuva
-    if st.session_state.get("_editor_chuva_nreg") != n_registros:
-        st.session_state.pop("editor_chuva", None)
-        st.session_state["_editor_chuva_nreg"] = n_registros
-    if st.session_state.get("_editor_chuva_dtreg") != int(intervalo_registro_s):
-        st.session_state.pop("editor_chuva", None)
-        st.session_state["_editor_chuva_dtreg"] = int(intervalo_registro_s)
-
-    chuva_loaded = st.session_state.get("chuva_df_loaded")
-    if isinstance(chuva_loaded, pd.DataFrame) and not chuva_loaded.empty:
-        chuva_loaded = chuva_loaded.copy()
-        src_col = None
-        if col_chuva in chuva_loaded.columns:
-            src_col = col_chuva
-        elif "P_mm_h" in chuva_loaded.columns:
-            src_col = "P_mm_h"
-        elif "P_mm" in chuva_loaded.columns:
-            src_col = "P_mm"
-        if src_col is not None:
-            chuva_df[col_chuva] = np.nan
-            n_copy = min(len(chuva_df), len(chuva_loaded))
-            vals_src = pd.to_numeric(chuva_loaded.iloc[:n_copy][src_col], errors="coerce").to_numpy()
-            # Conversao apenas se a coluna carregada for de outra unidade explicita
-            if src_col != col_chuva and src_col == "P_mm_h" and col_chuva == "P_mm":
-                vals_src = vals_src * float(intervalo_registro_s) / 3600.0
-            elif src_col != col_chuva and src_col == "P_mm" and col_chuva == "P_mm_h":
-                vals_src = vals_src * 3600.0 / max(float(intervalo_registro_s), 1e-12)
-            chuva_df.loc[: n_copy - 1, col_chuva] = vals_src
-    chuva_df_edit = st.data_editor(
-        chuva_df,
-        num_rows="fixed",
-        use_container_width=True,
-        hide_index=True,
-        disabled=["Passo", "Tempo_s"],
-        key="editor_chuva",
-    )
-
-    try:
-        vals_ui = extrair_valores_chuva_df(chuva_df_edit, unidade_chuva)
-        met_p = metricas_precipitacao(vals_ui, unidade_chuva, float(intervalo_registro_s))
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Precipitação acumulada total (mm)", f"{met_p['P_acum_mm']:.2f}")
-        m2.metric("Intensidade máxima (mm/h)", f"{met_p['I_max_mm_h']:.2f}")
-        m3.metric("Duração do evento (min)", f"{met_p['Duracao_evento_min']:.1f}")
-        if float(tempo_recessao_min) > 0:
-            st.caption(
-                f"Recessão configurada: {float(tempo_recessao_min):.1f} min com P=0 após o fim da chuva "
-                f"(horizonte total de simulação: {tempo_total_s / 60.0:.1f} min)."
-            )
-    except Exception:
-        pass
-
-    st.subheader("5) Gestão da simulação")
-    st.text_input("Título da simulação para salvar", key="titulo_salvar", placeholder="Ex.: Evento 12/03/2026")
-    g1, g2 = st.columns(2)
-    if g1.button("Salvar simulação"):
-        payload = gerar_payload_simulacao(
-            titulo=st.session_state.get("titulo_salvar", ""),
-            dt_seg=int(dt_seg),
-            duracao_min=int(duracao_min),
-            n_ac=int(n_ac),
-            exutorio_id=int(exutorio_id),
-            b_canal=float(b_canal),
-            s_canal=float(s_canal),
-            n_canal=float(n_canal),
-            nivel_base=float(nivel_base),
-            usar_horton=bool(usar_horton),
-            horton_k_h_inv=float(horton_k_h_inv),
-            horton_f0_multiplicador=float(horton_f0_multiplicador),
-            usar_us_para_eq=bool(usar_us_para_eq),
-            ac_df=ac_preview,
-            us_df=us_df_run,
-            chuva_df=chuva_df_edit,
-            intervalo_registro_s=int(intervalo_registro_s),
-            dt_integracao_s=int(dt_integracao_s),
-            unidade_chuva=str(unidade_chuva),
-            tempo_recessao_min=float(tempo_recessao_min),
-            modo_mhu=str(modo_mhu),
-        )
-        store = st.session_state.get("sim_store", {"last_id": None, "items": []})
-        store["items"] = [x for x in store.get("items", []) if x.get("id") != payload["id"]]
-        store["items"].append(payload)
-        store["last_id"] = payload["id"]
-        st.session_state["sim_store"] = store
-        salvar_simulacoes_salvas(store)
-        st.success("Simulação salva com sucesso.")
-
-    if g2.button("Limpar simulação"):
-        st.session_state["_clear_sim_requested"] = True
-        st.rerun()
-
-    if st.button("Rodar simulação", type="primary"):
         try:
-            if not horario_ok:
-                st.error("Corrija os horários de início/fim antes de rodar a simulação.")
-                st.stop()
-            if (
-                modo_mhu == MODO_MHU_2_0
-                and not areas_ok
-                and not bool(st.session_state.get("autorizar_norm_areas_us", False))
-            ):
-                st.error(
-                    "Modo 2: áreas US inconsistentes com as ACs. Corrija os valores ou autorize "
-                    "a normalização proporcional antes de rodar."
+            vals_ui = extrair_valores_chuva_df(chuva_df_edit, unidade_chuva)
+            met_p = metricas_precipitacao(vals_ui, unidade_chuva, float(intervalo_registro_s))
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Precipitação acumulada total (mm)", f"{met_p['P_acum_mm']:.2f}")
+            m2.metric("Intensidade máxima (mm/h)", f"{met_p['I_max_mm_h']:.2f}")
+            m3.metric("Duração do evento (min)", f"{met_p['Duracao_evento_min']:.1f}")
+            if float(tempo_recessao_min) > 0:
+                st.caption(
+                    f"Recessão configurada: {float(tempo_recessao_min):.1f} min com P=0 após o fim da chuva "
+                    f"(horizonte total de simulação: {tempo_total_s / 60.0:.1f} min)."
                 )
-                st.stop()
-            erros = validar_campos_obrigatorios(
+        except Exception:
+            pass
+
+    with tab_run:
+        info_card(
+            "Revisão e execução",
+            "Confira o resumo, salve a configuração e execute o modelo. "
+            "A lógica hidrológica permanece inalterada.",
+        )
+        st.markdown(
+            f"""
+            - **Modo:** `{modo_mhu}`
+            - **Δt registro / integração:** {int(intervalo_registro_s)} s / {int(dt_integracao_s)} s
+            - **Duração chuva / recessão:** {int(duracao_min)} min / {float(tempo_recessao_min):.0f} min
+            - **ACs / exutório:** {int(n_ac)} / {int(exutorio_id)}
+            - **Canal:** B={float(b_canal):.2f} m · S={float(s_canal):.4f} · n={float(n_canal):.3f}
+            """
+        )
+        st.text_input("Título da simulação para salvar", key="titulo_salvar", placeholder="Ex.: Evento 12/03/2026")
+        g1, g2 = st.columns(2)
+        if g1.button("Salvar simulação"):
+            payload = gerar_payload_simulacao(
+                titulo=st.session_state.get("titulo_salvar", ""),
                 dt_seg=int(dt_seg),
                 duracao_min=int(duracao_min),
                 n_ac=int(n_ac),
@@ -3439,160 +3632,209 @@ else:
                 b_canal=float(b_canal),
                 s_canal=float(s_canal),
                 n_canal=float(n_canal),
+                nivel_base=float(nivel_base),
                 usar_horton=bool(usar_horton),
                 horton_k_h_inv=float(horton_k_h_inv),
                 horton_f0_multiplicador=float(horton_f0_multiplicador),
-                ac_df=ac_df,
+                usar_us_para_eq=bool(usar_us_para_eq),
+                ac_df=ac_preview,
                 us_df=us_df_run,
                 chuva_df=chuva_df_edit,
                 intervalo_registro_s=int(intervalo_registro_s),
+                dt_integracao_s=int(dt_integracao_s),
                 unidade_chuva=str(unidade_chuva),
                 tempo_recessao_min=float(tempo_recessao_min),
+                modo_mhu=str(modo_mhu),
             )
-            if erros:
-                st.error("A simulação não pode rodar. Corrija os campos obrigatórios:")
-                for e in erros:
-                    st.markdown(f"- {e}")
-                st.stop()
+            store = st.session_state.get("sim_store", {"last_id": None, "items": []})
+            store["items"] = [x for x in store.get("items", []) if x.get("id") != payload["id"]]
+            store["items"].append(payload)
+            store["last_id"] = payload["id"]
+            st.session_state["sim_store"] = store
+            salvar_simulacoes_salvas(store)
+            st.success("Simulação salva com sucesso.")
 
-            chuva_regs = extrair_valores_chuva_df(chuva_df_edit, str(unidade_chuva))
-            ac_df = ac_preview.copy()
-            ac_df["ID_AC"] = ac_df["ID_AC"].astype(int)
-            for col in ["Area_m2", "L_m", "S_m_m", "h0_m", "Infiltracao_eq_mm_h", "n_eq"]:
-                if col in ac_df.columns:
-                    ac_df[col] = ac_df[col].astype(float)
+        if g2.button("Limpar simulação"):
+            st.session_state["_clear_sim_requested"] = True
+            st.rerun()
 
-            df_saida, df_ac_detalhe, df_us_detalhe = executar_simulacao_mhu(
-                modo=str(modo_mhu),
-                dt=float(dt_integracao_s),
-                chuva_registros=chuva_regs,
-                ac_df=ac_df,
-                us_df=us_df_run,
-                exutorio_id=int(exutorio_id),
-                b_canal=float(b_canal),
-                s_canal=float(s_canal),
-                n_canal=float(n_canal),
-                nivel_base=float(nivel_base),
-                intervalo_registro_s=float(intervalo_registro_s),
-                unidade_chuva=str(unidade_chuva),
-                tempo_recessao_s=float(tempo_recessao_min) * 60.0,
-                usar_horton=bool(usar_horton),
-                horton_k_h_inv=float(horton_k_h_inv),
-                horton_f0_multiplicador=float(horton_f0_multiplicador),
-                estrategia_montante="proporcional_area",
-            )
-
-            tempo_chuva_s_run = max(len(chuva_regs) - 1, 0) * float(intervalo_registro_s)
-            st.session_state["df_saida_validacao"] = df_saida.copy()
-            st.session_state["df_ac_detalhe"] = df_ac_detalhe.copy()
-            st.session_state["df_us_detalhe"] = (
-                df_us_detalhe.copy() if df_us_detalhe is not None else None
-            )
-            st.session_state["df_validacao_obs"] = montar_df_validacao(
-                df_saida, st.session_state.get("df_validacao_obs")
-            )
-            st.session_state["ac_df_loaded"] = ac_df.copy()
-            st.session_state["us_df_loaded"] = us_df_run.copy()
-            st.session_state["chuva_df_loaded"] = chuva_df_edit.copy()
-            st.session_state["sim_meta_balanco"] = {
-                "dt": float(dt_integracao_s),
-                "tempo_chuva_s": float(tempo_chuva_s_run),
-                "tempo_recessao_s": float(tempo_recessao_min) * 60.0,
-                "exutorio_id": int(exutorio_id),
-                "intervalo_registro_s": float(intervalo_registro_s),
-                "unidade_chuva": str(unidade_chuva),
-                "modo_mhu": str(modo_mhu),
-            }
-
-            rotulo_modo = (
-                "MHU 1.1 (equivalente)" if modo_mhu == MODO_MHU_1_1 else "MHU 2.0 (por classe US)"
-            )
-            st.success(f"Simulação concluída — {rotulo_modo}.")
-            met_run = metricas_precipitacao(
-                chuva_regs, str(unidade_chuva), float(intervalo_registro_s)
-            )
-            r1, r2, r3 = st.columns(3)
-            r1.metric("Precipitação acumulada total (mm)", f"{met_run['P_acum_mm']:.2f}")
-            r2.metric("Intensidade máxima (mm/h)", f"{met_run['I_max_mm_h']:.2f}")
-            r3.metric("Duração do evento (min)", f"{met_run['Duracao_evento_min']:.1f}")
-
-            tempo_hhmm = montar_tempo_evento_hhmm(len(df_saida), int(dt_integracao_s), hora_inicio_str)
-            df_saida = df_saida.copy()
-            df_saida["Tempo_hhmm"] = tempo_hhmm
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Pico de vazão (m³/s)", f"{df_saida['Q_ex_m3_s'].max():.4f}")
-            c2.metric("Pico de nível (m)", f"{df_saida['Nivel_m'].max():.4f}")
-            c3.metric("Horário do pico", f"{df_saida.loc[df_saida['Nivel_m'].idxmax(), 'Tempo_hhmm']}")
-
-            st.plotly_chart(fig_nivel_com_hietograma(df_saida), use_container_width=True)
-
-            fig_q = px.line(df_saida, x="Tempo_hhmm", y="Q_ex_m3_s", title="Hidrograma de vazão no exutório")
-            fig_q.update_layout(xaxis_title="Horário", yaxis_title="Vazão (m³/s)")
-            st.plotly_chart(fig_q, use_container_width=True)
-
-            st.subheader("Saída - exutório")
-            st.dataframe(df_saida, use_container_width=True, hide_index=True)
-
-            st.subheader("Saída detalhada por AC")
-            ids_ac_out = sorted(df_ac_detalhe["ID_AC"].unique())
-            ac_out_sel = st.selectbox("Filtrar AC", options=["Todas"] + list(ids_ac_out), key="out_ac_sel")
-            if ac_out_sel == "Todas":
-                st.dataframe(df_ac_detalhe, use_container_width=True, hide_index=True)
-            else:
-                st.dataframe(
-                    df_ac_detalhe[df_ac_detalhe["ID_AC"] == ac_out_sel].reset_index(drop=True),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-
-            if df_us_detalhe is not None and not df_us_detalhe.empty:
-                st.subheader("Saída detalhada por classe de uso do solo (US)")
-                st.caption(
-                    "Cada classe possui h, Q_out, infiltração e volumes próprios. "
-                    "Estratégia de montante: mistura homogênea proporcional à área (experimental)."
-                )
-                ids_us_ac = sorted(df_us_detalhe["ID_AC"].unique())
-                us_ac_sel = st.selectbox("AC (detalhe US)", options=ids_us_ac, key="out_us_ac_sel")
-                df_us_ac = df_us_detalhe[df_us_detalhe["ID_AC"] == us_ac_sel]
-                ids_us = sorted(df_us_ac["ID_US"].unique())
-                us_sel = st.selectbox("Classe US", options=["Todas"] + list(ids_us), key="out_us_sel")
-                if us_sel == "Todas":
-                    st.dataframe(df_us_ac.reset_index(drop=True), use_container_width=True, hide_index=True)
-                    fig_us = px.line(
-                        df_us_ac,
-                        x="Tempo_s",
-                        y="Q_out_m3_s",
-                        color="Classe_US",
-                        title=f"Vazão por classe US — AC {us_ac_sel}",
+        if st.button("Rodar simulação", type="primary"):
+            try:
+                if not horario_ok:
+                    st.error("Corrija os horários de início/fim antes de rodar a simulação.")
+                    st.stop()
+                if (
+                    modo_mhu == MODO_MHU_2_0
+                    and not areas_ok
+                    and not bool(st.session_state.get("autorizar_norm_areas_us", False))
+                ):
+                    st.error(
+                        "Modo 2: áreas US inconsistentes com as ACs. Corrija os valores ou autorize "
+                        "a normalização proporcional antes de rodar."
                     )
-                    fig_us.update_layout(xaxis_title="Tempo (s)", yaxis_title="Q_out (m³/s)")
-                    st.plotly_chart(fig_us, use_container_width=True)
+                    st.stop()
+                erros = validar_campos_obrigatorios(
+                    dt_seg=int(dt_seg),
+                    duracao_min=int(duracao_min),
+                    n_ac=int(n_ac),
+                    exutorio_id=int(exutorio_id),
+                    b_canal=float(b_canal),
+                    s_canal=float(s_canal),
+                    n_canal=float(n_canal),
+                    usar_horton=bool(usar_horton),
+                    horton_k_h_inv=float(horton_k_h_inv),
+                    horton_f0_multiplicador=float(horton_f0_multiplicador),
+                    ac_df=ac_df,
+                    us_df=us_df_run,
+                    chuva_df=chuva_df_edit,
+                    intervalo_registro_s=int(intervalo_registro_s),
+                    unidade_chuva=str(unidade_chuva),
+                    tempo_recessao_min=float(tempo_recessao_min),
+                )
+                if erros:
+                    st.error("A simulação não pode rodar. Corrija os campos obrigatórios:")
+                    for e in erros:
+                        st.markdown(f"- {e}")
+                    st.stop()
+
+                chuva_regs = extrair_valores_chuva_df(chuva_df_edit, str(unidade_chuva))
+                ac_df = ac_preview.copy()
+                ac_df["ID_AC"] = ac_df["ID_AC"].astype(int)
+                for col in ["Area_m2", "L_m", "S_m_m", "h0_m", "Infiltracao_eq_mm_h", "n_eq"]:
+                    if col in ac_df.columns:
+                        ac_df[col] = ac_df[col].astype(float)
+
+                df_saida, df_ac_detalhe, df_us_detalhe = executar_simulacao_mhu(
+                    modo=str(modo_mhu),
+                    dt=float(dt_integracao_s),
+                    chuva_registros=chuva_regs,
+                    ac_df=ac_df,
+                    us_df=us_df_run,
+                    exutorio_id=int(exutorio_id),
+                    b_canal=float(b_canal),
+                    s_canal=float(s_canal),
+                    n_canal=float(n_canal),
+                    nivel_base=float(nivel_base),
+                    intervalo_registro_s=float(intervalo_registro_s),
+                    unidade_chuva=str(unidade_chuva),
+                    tempo_recessao_s=float(tempo_recessao_min) * 60.0,
+                    usar_horton=bool(usar_horton),
+                    horton_k_h_inv=float(horton_k_h_inv),
+                    horton_f0_multiplicador=float(horton_f0_multiplicador),
+                    estrategia_montante="proporcional_area",
+                )
+
+                tempo_chuva_s_run = max(len(chuva_regs) - 1, 0) * float(intervalo_registro_s)
+                st.session_state["df_saida_validacao"] = df_saida.copy()
+                st.session_state["df_ac_detalhe"] = df_ac_detalhe.copy()
+                st.session_state["df_us_detalhe"] = (
+                    df_us_detalhe.copy() if df_us_detalhe is not None else None
+                )
+                st.session_state["df_validacao_obs"] = montar_df_validacao(
+                    df_saida, st.session_state.get("df_validacao_obs")
+                )
+                st.session_state["ac_df_loaded"] = ac_df.copy()
+                st.session_state["us_df_loaded"] = us_df_run.copy()
+                st.session_state["chuva_df_loaded"] = chuva_df_edit.copy()
+                st.session_state["sim_meta_balanco"] = {
+                    "dt": float(dt_integracao_s),
+                    "tempo_chuva_s": float(tempo_chuva_s_run),
+                    "tempo_recessao_s": float(tempo_recessao_min) * 60.0,
+                    "exutorio_id": int(exutorio_id),
+                    "intervalo_registro_s": float(intervalo_registro_s),
+                    "unidade_chuva": str(unidade_chuva),
+                    "modo_mhu": str(modo_mhu),
+                }
+
+                rotulo_modo = (
+                    "MHU 1.1 (equivalente)" if modo_mhu == MODO_MHU_1_1 else "MHU 2.0 (por classe US)"
+                )
+                st.success(f"Simulação concluída — {rotulo_modo}.")
+                met_run = metricas_precipitacao(
+                    chuva_regs, str(unidade_chuva), float(intervalo_registro_s)
+                )
+                r1, r2, r3 = st.columns(3)
+                r1.metric("Precipitação acumulada total (mm)", f"{met_run['P_acum_mm']:.2f}")
+                r2.metric("Intensidade máxima (mm/h)", f"{met_run['I_max_mm_h']:.2f}")
+                r3.metric("Duração do evento (min)", f"{met_run['Duracao_evento_min']:.1f}")
+
+                tempo_hhmm = montar_tempo_evento_hhmm(len(df_saida), int(dt_integracao_s), hora_inicio_str)
+                df_saida = df_saida.copy()
+                df_saida["Tempo_hhmm"] = tempo_hhmm
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Pico de vazão (m³/s)", f"{df_saida['Q_ex_m3_s'].max():.4f}")
+                c2.metric("Pico de nível (m)", f"{df_saida['Nivel_m'].max():.4f}")
+                c3.metric("Horário do pico", f"{df_saida.loc[df_saida['Nivel_m'].idxmax(), 'Tempo_hhmm']}")
+
+                st.plotly_chart(fig_nivel_com_hietograma(df_saida), use_container_width=True)
+
+                fig_q = px.line(df_saida, x="Tempo_hhmm", y="Q_ex_m3_s", title="Hidrograma de vazão no exutório")
+                fig_q.update_layout(xaxis_title="Horário", yaxis_title="Vazão (m³/s)")
+                st.plotly_chart(fig_q, use_container_width=True)
+
+                st.subheader("Saída - exutório")
+                st.dataframe(df_saida, use_container_width=True, hide_index=True)
+
+                st.subheader("Saída detalhada por AC")
+                ids_ac_out = sorted(df_ac_detalhe["ID_AC"].unique())
+                ac_out_sel = st.selectbox("Filtrar AC", options=["Todas"] + list(ids_ac_out), key="out_ac_sel")
+                if ac_out_sel == "Todas":
+                    st.dataframe(df_ac_detalhe, use_container_width=True, hide_index=True)
                 else:
                     st.dataframe(
-                        df_us_ac[df_us_ac["ID_US"] == us_sel].reset_index(drop=True),
+                        df_ac_detalhe[df_ac_detalhe["ID_AC"] == ac_out_sel].reset_index(drop=True),
                         use_container_width=True,
                         hide_index=True,
                     )
 
-            tol_xlsx = float(st.session_state.get("tol_balanco_m3", TOL_BALANCO_HIDRICO_M3_DEFAULT))
-            bal_xlsx = diagnosticar_balanco_hidrico(
-                df_saida=df_saida,
-                df_ac_detalhe=df_ac_detalhe,
-                ac_df=ac_df,
-                exutorio_id=int(exutorio_id),
-                dt=float(dt_integracao_s),
-                tempo_chuva_s=float(tempo_chuva_s_run),
-                tol_fechamento_m3=tol_xlsx,
-            )
-            st.session_state["balanco_hidrico"] = bal_xlsx
-            st.download_button(
-                "Baixar resultados em Excel",
-                data=montar_excel_resultados(
-                    df_saida, df_ac_detalhe, bal_xlsx, df_us_detalhe=df_us_detalhe
-                ),
-                file_name="resultado_modelo_hidrologico.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        except Exception as exc:
-            st.error(f"Erro na simulação: {exc}")
+                if df_us_detalhe is not None and not df_us_detalhe.empty:
+                    st.subheader("Saída detalhada por classe de uso do solo (US)")
+                    st.caption(
+                        "Cada classe possui h, Q_out, infiltração e volumes próprios. "
+                        "Estratégia de montante: mistura homogênea proporcional à área (experimental)."
+                    )
+                    ids_us_ac = sorted(df_us_detalhe["ID_AC"].unique())
+                    us_ac_sel = st.selectbox("AC (detalhe US)", options=ids_us_ac, key="out_us_ac_sel")
+                    df_us_ac = df_us_detalhe[df_us_detalhe["ID_AC"] == us_ac_sel]
+                    ids_us = sorted(df_us_ac["ID_US"].unique())
+                    us_sel = st.selectbox("Classe US", options=["Todas"] + list(ids_us), key="out_us_sel")
+                    if us_sel == "Todas":
+                        st.dataframe(df_us_ac.reset_index(drop=True), use_container_width=True, hide_index=True)
+                        fig_us = px.line(
+                            df_us_ac,
+                            x="Tempo_s",
+                            y="Q_out_m3_s",
+                            color="Classe_US",
+                            title=f"Vazão por classe US — AC {us_ac_sel}",
+                        )
+                        fig_us.update_layout(xaxis_title="Tempo (s)", yaxis_title="Q_out (m³/s)")
+                        st.plotly_chart(fig_us, use_container_width=True)
+                    else:
+                        st.dataframe(
+                            df_us_ac[df_us_ac["ID_US"] == us_sel].reset_index(drop=True),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+                tol_xlsx = float(st.session_state.get("tol_balanco_m3", TOL_BALANCO_HIDRICO_M3_DEFAULT))
+                bal_xlsx = diagnosticar_balanco_hidrico(
+                    df_saida=df_saida,
+                    df_ac_detalhe=df_ac_detalhe,
+                    ac_df=ac_df,
+                    exutorio_id=int(exutorio_id),
+                    dt=float(dt_integracao_s),
+                    tempo_chuva_s=float(tempo_chuva_s_run),
+                    tol_fechamento_m3=tol_xlsx,
+                )
+                st.session_state["balanco_hidrico"] = bal_xlsx
+                st.download_button(
+                    "Baixar resultados em Excel",
+                    data=montar_excel_resultados(
+                        df_saida, df_ac_detalhe, bal_xlsx, df_us_detalhe=df_us_detalhe
+                    ),
+                    file_name="resultado_modelo_hidrologico.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            except Exception as exc:
+                st.error(f"Erro na simulação: {exc}")
 

@@ -1,6 +1,13 @@
-# Configuracao opcional para deploy (Streamlit Cloud, etc.)
+# Tema visual MHU — identidade hidrológica
 [server]
 headless = true
 
 [browser]
 gatherUsageStats = false
+
+[theme]
+primaryColor = "#176B87"
+backgroundColor = "#F4F7FA"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#243746"
+font = "sans serif"

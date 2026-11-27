@@ -6,7 +6,9 @@ Aplicação web local em `Streamlit` para simular:
 - conversão de vazão para nível no canal (Manning, seção retangular).
 
 Versões: **MHU 1.1** (Modo 1, parâmetros equivalentes — preservado) e **MHU 2.0** experimental
-(Modo 2, processamento por classe de uso do solo). Ver `MHU_2.0_CONCEPCAO.md`.
+(Modo 2, processamento por classe de uso do solo). Ver `MHU_2.0_CONCEPCAO.md` e `METODOLOGIA_MODELO.md`.
+
+Interface com identidade visual hidrológica (`assets/`, `ui_components.py`, `plot_theme.py`) — exclusivamente organizacional/visual.
 
 ## Como executar
 
@@ -16,6 +18,23 @@ Versões: **MHU 1.1** (Modo 1, parâmetros equivalentes — preservado) e **MHU 
    - `pip install -r requirements.txt`
 3. Rode a aplicação:
    - `streamlit run app.py`
+
+## Testes automatizados
+
+```powershell
+pip install -r requirements.txt
+python -m pytest tests
+```
+
+A suíte em `tests/` cobre precipitação, infiltração, conservação de massa, rede, Manning do canal, equivalência Modo 1×2, estatísticas, Excel/simulações salvas e checagem básica da UI Streamlit (`AppTest`). Metodologia e resultados: `METODOLOGIA_MODELO.md`.
+
+## Documentação
+
+- `METODOLOGIA_MODELO.md` — equações, hipóteses, sequência numérica, limitações, calibração
+- `MHU_2.0_CONCEPCAO.md` — mudança conceitual do Modo 2
+- `CONVERGENCIA_NUMERICA.md` — solver implícito superficial
+- `CHANGELOG.md` — histórico de versões
+- Snapshots: `snapshots/MHU_1.0/`, `snapshots/MHU_1.1/`
 
 ## Navegação
 

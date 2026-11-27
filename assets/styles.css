@@ -1,0 +1,261 @@
+/* MHU — identidade visual hidrológica */
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+
+:root {
+  --mhu-petrol: #103B53;
+  --mhu-hydro: #176B87;
+  --mhu-teal: #26A69A;
+  --mhu-light: #EAF3F8;
+  --mhu-bg: #F4F7FA;
+  --mhu-card: #FFFFFF;
+  --mhu-text: #243746;
+  --mhu-muted: #64748B;
+  --mhu-border: #DCE5EC;
+  --mhu-alert: #D97736;
+  --mhu-radius: 10px;
+  --mhu-shadow: 0 2px 10px rgba(16, 59, 83, 0.06);
+}
+
+html, body, [class*="css"] {
+  font-family: Inter, Roboto, "Segoe UI", sans-serif;
+  color: var(--mhu-text);
+}
+
+.stApp {
+  background: var(--mhu-bg);
+}
+
+/* Sidebar petrol */
+section[data-testid="stSidebar"] {
+  background: linear-gradient(180deg, #103B53 0%, #0c2f42 100%);
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+section[data-testid="stSidebar"] * {
+  color: #EAF3F8 !important;
+}
+section[data-testid="stSidebar"] .stRadio label {
+  padding: 0.45rem 0.7rem !important;
+  border-radius: 8px !important;
+  margin-bottom: 2px !important;
+}
+section[data-testid="stSidebar"] .stRadio label:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+section[data-testid="stSidebar"] .stRadio [data-checked="true"] + div,
+section[data-testid="stSidebar"] label[data-baseweb="radio"]:has(input:checked) {
+  background: rgba(38, 166, 154, 0.22) !important;
+  border-left: 3px solid #26A69A !important;
+}
+section[data-testid="stSidebar"] hr {
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+section[data-testid="stSidebar"] .stCaption, section[data-testid="stSidebar"] small {
+  color: rgba(234, 243, 248, 0.7) !important;
+}
+
+.mhu-nav-group {
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(234, 243, 248, 0.55) !important;
+  margin: 0.85rem 0 0.35rem 0.35rem;
+  font-weight: 600;
+}
+
+.mhu-sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.25rem 1rem 0.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  margin-bottom: 0.75rem;
+}
+.mhu-sidebar-brand img {
+  width: 42px;
+  height: 42px;
+}
+.mhu-sidebar-brand .title {
+  font-weight: 700;
+  font-size: 1.05rem;
+  line-height: 1.2;
+  color: #fff !important;
+}
+.mhu-sidebar-brand .sub {
+  font-size: 0.72rem;
+  color: rgba(234, 243, 248, 0.65) !important;
+}
+
+.mhu-sidebar-footer {
+  margin-top: 1.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 0.75rem;
+  color: rgba(234, 243, 248, 0.55) !important;
+}
+
+/* Cards */
+.mhu-card {
+  background: var(--mhu-card);
+  border: 1px solid var(--mhu-border);
+  border-radius: var(--mhu-radius);
+  box-shadow: var(--mhu-shadow);
+  padding: 1.1rem 1.25rem;
+  margin-bottom: 1rem;
+}
+.mhu-card h3, .mhu-card h4 {
+  margin: 0 0 0.35rem 0;
+  color: var(--mhu-petrol);
+  font-weight: 600;
+}
+.mhu-card p, .mhu-card .muted {
+  color: var(--mhu-muted);
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.mhu-hero {
+  background: linear-gradient(135deg, #103B53 0%, #176B87 55%, #26A69A 100%);
+  border-radius: 12px;
+  padding: 1.75rem 1.75rem 1.5rem;
+  color: #fff;
+  margin-bottom: 1.25rem;
+  box-shadow: 0 8px 24px rgba(16, 59, 83, 0.18);
+}
+.mhu-hero h1 {
+  margin: 0 0 0.4rem 0;
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: #fff;
+}
+.mhu-hero p {
+  margin: 0;
+  opacity: 0.92;
+  max-width: 52rem;
+  line-height: 1.5;
+}
+
+.mhu-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem;
+  margin: 0.75rem 0 1.25rem;
+}
+.mhu-metric {
+  background: var(--mhu-card);
+  border: 1px solid var(--mhu-border);
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+  box-shadow: var(--mhu-shadow);
+}
+.mhu-metric .label {
+  font-size: 0.75rem;
+  color: var(--mhu-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+.mhu-metric .value {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--mhu-petrol);
+  margin-top: 0.2rem;
+}
+.mhu-metric .unit {
+  font-size: 0.8rem;
+  color: var(--mhu-muted);
+  font-weight: 500;
+}
+
+.mhu-section-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--mhu-petrol);
+  margin: 0.5rem 0 0.75rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 2px solid var(--mhu-light);
+}
+
+.mhu-badge {
+  display: inline-block;
+  background: var(--mhu-light);
+  color: var(--mhu-hydro);
+  border-radius: 999px;
+  padding: 0.15rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.mhu-badge-alert {
+  background: #FFF4EB;
+  color: var(--mhu-alert);
+}
+
+.mhu-chart-box {
+  background: #fff;
+  border: 1px solid var(--mhu-border);
+  border-radius: 12px;
+  padding: 0.75rem 0.85rem 0.35rem;
+  box-shadow: var(--mhu-shadow);
+  margin-bottom: 1rem;
+}
+
+.mhu-module-card {
+  background: #fff;
+  border: 1px solid var(--mhu-border);
+  border-radius: 12px;
+  padding: 1rem 1.1rem;
+  height: 100%;
+  box-shadow: var(--mhu-shadow);
+  transition: border-color 0.15s ease;
+}
+.mhu-module-card:hover {
+  border-color: var(--mhu-teal);
+}
+.mhu-module-card .icon {
+  font-size: 1.35rem;
+  margin-bottom: 0.35rem;
+}
+.mhu-module-card h4 {
+  margin: 0 0 0.3rem 0;
+  color: var(--mhu-petrol);
+}
+.mhu-module-card p {
+  margin: 0;
+  color: var(--mhu-muted);
+  font-size: 0.88rem;
+}
+
+/* Tables */
+div[data-testid="stDataFrame"], div[data-testid="stDataEditor"] {
+  border: 1px solid var(--mhu-border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #fff;
+}
+
+/* Buttons */
+.stButton > button[kind="primary"], div[data-testid="stBaseButton-primary"] button {
+  background: linear-gradient(90deg, #176B87, #26A69A) !important;
+  border: none !important;
+  border-radius: 8px !important;
+  font-weight: 600 !important;
+}
+.stButton > button {
+  border-radius: 8px !important;
+}
+
+/* Tabs */
+button[data-baseweb="tab"] {
+  font-weight: 600 !important;
+  color: var(--mhu-muted) !important;
+}
+button[data-baseweb="tab"][aria-selected="true"] {
+  color: var(--mhu-hydro) !important;
+}
+
+/* Alert tone */
+div[data-testid="stAlert"] {
+  border-radius: 10px;
+}
+
+/* Hide default footer clutter slightly */
+footer { visibility: hidden; }
